@@ -857,6 +857,27 @@
 
     .logo-preview img { width: 100%; height: 100%; object-fit: contain; padding: 7px; }
 
+    .library-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .library-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #0d0d0d;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .library-item strong { color: var(--text); }
+
     .system-checks {
       display: flex;
       flex-wrap: wrap;
@@ -999,6 +1020,17 @@
               <div class="caption-meta">
                 <span>Fetched automatically. Edit anything you like.</span>
                 <span id="captionCount">0 / 2200</span>
+              </div>
+            </div>
+
+            <div class="control-grid">
+              <div class="field">
+                <label for="accountSelect">Post to Instagram account</label>
+                <select id="accountSelect"></select>
+              </div>
+              <div class="field">
+                <label for="overlaySelect">Logo / overlay</label>
+                <select id="overlaySelect"></select>
               </div>
             </div>
 
@@ -1210,6 +1242,70 @@
           </div>
         </div>
       </form>
+
+      <form class="card setup-card" id="accountForm" style="margin-top: 18px;">
+        <div class="card-header">
+          <div>
+            <h2>Add another publishing account</h2>
+            <p class="subcopy">Each profile stores its own Instagram and Cloudinary credentials on the persistent data disk.</p>
+          </div>
+        </div>
+        <div class="setup-grid">
+          <div class="field wide">
+            <label for="accountName">Account display name</label>
+            <input id="accountName" name="name" type="text" placeholder="Main brand account" required>
+          </div>
+          <div class="field">
+            <label for="accountCloudName">Cloudinary cloud name</label>
+            <input id="accountCloudName" name="CLOUDINARY_CLOUD_NAME" type="text" required>
+          </div>
+          <div class="field">
+            <label for="accountCloudKey">Cloudinary API key</label>
+            <input id="accountCloudKey" name="CLOUDINARY_API_KEY" type="password" required>
+          </div>
+          <div class="field wide">
+            <label for="accountCloudSecret">Cloudinary API secret</label>
+            <input id="accountCloudSecret" name="CLOUDINARY_API_SECRET" type="password" required>
+          </div>
+          <div class="field">
+            <label for="accountIgUser">Instagram Business Account ID</label>
+            <input id="accountIgUser" name="IG_USER_ID" type="text" required>
+          </div>
+          <div class="field">
+            <label for="accountIgToken">Instagram long-lived token</label>
+            <input id="accountIgToken" name="IG_ACCESS_TOKEN" type="password" required>
+          </div>
+        </div>
+        <div class="action-row">
+          <div class="action-note"><span>i</span><span>The display name appears in the web and Telegram account selectors.</span></div>
+          <button class="primary-button" type="submit">Add account</button>
+        </div>
+        <div class="library-list" id="accountLibrary"></div>
+      </form>
+
+      <form class="card setup-card" id="overlayForm" style="margin-top: 18px;">
+        <div class="card-header">
+          <div>
+            <h2>Add logo or overlay</h2>
+            <p class="subcopy">Upload multiple transparent PNGs or animated GIFs and choose one for each Reel.</p>
+          </div>
+        </div>
+        <div class="setup-grid">
+          <div class="field">
+            <label for="overlayName">Overlay display name</label>
+            <input id="overlayName" name="name" type="text" placeholder="White corner logo">
+          </div>
+          <div class="field">
+            <label for="overlayFile">PNG or GIF file</label>
+            <input id="overlayFile" name="overlay" type="file" accept=".png,.gif,image/png,image/gif" required>
+          </div>
+        </div>
+        <div class="action-row">
+          <div class="action-note"><span>i</span><span>The selected overlay still supports drag positioning and size adjustment.</span></div>
+          <button class="primary-button" type="submit">Add overlay</button>
+        </div>
+        <div class="library-list" id="overlayLibrary"></div>
+      </form>
     </section>
   </main>
 
@@ -1233,7 +1329,9 @@
       logoY: 90,
       logoUrl: null,
       configured: false,
-      logo: false
+      logo: false,
+      accounts: [],
+      overlays: []
     };
 
     const $ = (selector) => document.querySelector(selector);
@@ -1481,7 +1579,9 @@
             y_center_percent: state.logoY,
             delay_minutes: Number($("#delay").value),
             scheduled_at: $("#scheduleAt").value ? new Date($("#scheduleAt").value).toISOString() : null,
-            destination: document.querySelector('input[name="destination"]:checked').value
+            destination: document.querySelector('input[name="destination"]:checked').value,
+            account_id: $("#accountSelect").value,
+            overlay_id: $("#overlaySelect").value
           })
         });
         resetComposer();
@@ -1553,6 +1653,58 @@
       });
     }
 
+    function renderProfileLibraries() {
+      const accountSelect = $("#accountSelect");
+      const previousAccount = accountSelect.value;
+      accountSelect.innerHTML = state.accounts.length
+        ? state.accounts.map(account => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)}</option>`).join("")
+        : `<option value="">No publishing accounts</option>`;
+      if (state.accounts.some(account => account.id === previousAccount)) accountSelect.value = previousAccount;
+
+      const overlaySelect = $("#overlaySelect");
+      const previousOverlay = overlaySelect.value;
+      overlaySelect.innerHTML = state.overlays.length
+        ? state.overlays.map(overlay => `<option value="${escapeHtml(overlay.id)}">${escapeHtml(overlay.name)}${overlay.animated ? " (GIF)" : ""}</option>`).join("")
+        : `<option value="">No overlays uploaded</option>`;
+      if (state.overlays.some(overlay => overlay.id === previousOverlay)) overlaySelect.value = previousOverlay;
+
+      $("#accountLibrary").innerHTML = state.accounts.length
+        ? state.accounts.map(account => `
+          <div class="library-item">
+            <strong>${escapeHtml(account.name)}</strong>
+            <span>${escapeHtml(account.ig_user_id)} · ${escapeHtml(account.source)}</span>
+          </div>
+        `).join("")
+        : `<div class="library-item"><span>No publishing accounts saved.</span></div>`;
+      $("#overlayLibrary").innerHTML = state.overlays.length
+        ? state.overlays.map(overlay => `
+          <div class="library-item">
+            <strong>${escapeHtml(overlay.name)}</strong>
+            <span>${overlay.animated ? "Animated GIF" : "PNG overlay"}</span>
+          </div>
+        `).join("")
+        : `<div class="library-item"><span>No overlays uploaded.</span></div>`;
+      applySelectedOverlay();
+    }
+
+    function applySelectedOverlay() {
+      const overlayId = $("#overlaySelect").value;
+      const selected = state.overlays.find(overlay => overlay.id === overlayId) || state.overlays[0];
+      const logo = $("#draggableLogo");
+      const preview = $("#logoPreview");
+      if (!selected) {
+        state.logoUrl = null;
+        logo.classList.add("hidden");
+        preview.textContent = "No overlay";
+        return;
+      }
+      state.logoUrl = `${selected.url}?t=${Date.now()}`;
+      logo.src = state.logoUrl;
+      logo.classList.remove("hidden");
+      preview.innerHTML = `<img src="${state.logoUrl}" alt="${escapeHtml(selected.name)}">`;
+      updateLogoOverlay();
+    }
+
     async function refreshSetup() {
       try {
         const [settings, health] = await Promise.all([api("/api/settings"), api("/api/health")]);
@@ -1560,8 +1712,10 @@
         if (health.placement_mode !== "center-v2" || !health.job_queue || !health.job_overview) {
           throw new Error("ReelPoster server is outdated. Restart it, then refresh this page.");
         }
-        state.configured = Object.values(settings.configured).every(Boolean);
-        state.logo = Boolean(settings.logo_url);
+        state.accounts = settings.accounts || [];
+        state.overlays = settings.overlays || [];
+        state.configured = state.accounts.length > 0;
+        state.logo = state.overlays.length > 0;
         $("#graphVersion").value = settings.graph_api_version || "v25.0";
         applyConfiguredPlaceholders(settings.configured);
         applyConfiguredPlaceholders(settings.telegram_configured || {});
@@ -1571,16 +1725,7 @@
         setCheck("#ffmpegCheck", health.ffmpeg, health.ffmpeg ? "FFmpeg ready" : "FFmpeg missing");
         setCheck("#logoCheck", state.logo, state.logo ? "Logo saved" : "Logo needed");
         setCheck("#credentialsCheck", state.configured, state.configured ? "Credentials saved" : "Credentials needed");
-
-        const preview = $("#logoPreview");
-        if (settings.logo_url) {
-          state.logoUrl = `${settings.logo_url}?t=${Date.now()}`;
-          preview.innerHTML = `<img src="${state.logoUrl}" alt="Saved logo">`;
-          const overlay = $("#draggableLogo");
-          overlay.src = state.logoUrl;
-          overlay.classList.remove("hidden");
-          updateLogoOverlay();
-        }
+        renderProfileLibraries();
       } catch (error) {
         showToast("Could not read local setup status.", true);
       }
@@ -1711,6 +1856,49 @@
       }
     }
 
+    async function saveAccount(event) {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const button = form.querySelector('button[type="submit"]');
+      setButtonLoading(button, true, "Adding");
+      try {
+        const result = await api("/api/accounts", {
+          method: "POST",
+          body: new FormData(form)
+        });
+        form.reset();
+        await refreshSetup();
+        $("#accountSelect").value = result.account.id;
+        showToast(`Account "${result.account.name}" added.`);
+      } catch (error) {
+        showToast(error.message, true);
+      } finally {
+        setButtonLoading(button, false);
+      }
+    }
+
+    async function saveOverlay(event) {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const button = form.querySelector('button[type="submit"]');
+      setButtonLoading(button, true, "Uploading");
+      try {
+        const result = await api("/api/overlays", {
+          method: "POST",
+          body: new FormData(form)
+        });
+        form.reset();
+        await refreshSetup();
+        $("#overlaySelect").value = result.overlay.id;
+        applySelectedOverlay();
+        showToast(`Overlay "${result.overlay.name}" added.`);
+      } catch (error) {
+        showToast(error.message, true);
+      } finally {
+        setButtonLoading(button, false);
+      }
+    }
+
     async function testSettings() {
       const button = $("#testSettingsButton");
       setButtonLoading(button, true, "Testing");
@@ -1754,7 +1942,10 @@
     $("#setupNav").addEventListener("click", () => showView("setup"));
     $("#refreshJobsButton").addEventListener("click", loadJobs);
     $("#settingsForm").addEventListener("submit", saveSettings);
+    $("#accountForm").addEventListener("submit", saveAccount);
+    $("#overlayForm").addEventListener("submit", saveOverlay);
     $("#testSettingsButton").addEventListener("click", testSettings);
+    $("#overlaySelect").addEventListener("change", applySelectedOverlay);
     $("#reelUrl").addEventListener("keydown", event => {
       if (event.key === "Enter") fetchReel();
     });

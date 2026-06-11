@@ -99,14 +99,60 @@ def selected(label: str, active: bool) -> str:
     return f"[x] {label}" if active else label
 
 
+def account_options() -> list[dict]:
+    return [reelposter.public_account(item) for item in reelposter.account_profiles()]
+
+
+def overlay_options() -> list[dict]:
+    return [reelposter.public_overlay(item) for item in reelposter.overlay_profiles()]
+
+
+def option_name(options: list[dict], option_id: str | None, fallback: str) -> str:
+    option = next((item for item in options if item["id"] == option_id), None)
+    return option["name"] if option else fallback
+
+
+def next_option_id(options: list[dict], current_id: str | None) -> str | None:
+    if not options:
+        return None
+    ids = [item["id"] for item in options]
+    if current_id not in ids:
+        return ids[0]
+    return ids[(ids.index(current_id) + 1) % len(ids)]
+
+
 def draft_keyboard(job: dict) -> InlineKeyboardMarkup:
     position = job.get("telegram_position", "br")
     size = int(job.get("telegram_size", 16))
     destination = job.get("telegram_destination", "grid")
     delay = int(job.get("telegram_delay", 0))
     scheduled = bool(job.get("telegram_scheduled_at"))
+    accounts = account_options()
+    overlays = overlay_options()
     return InlineKeyboardMarkup(
         [
+            [
+                InlineKeyboardButton(
+                    "Account: "
+                    + option_name(
+                        accounts,
+                        job.get("telegram_account_id"),
+                        "Not configured",
+                    ),
+                    callback_data="rp:acct:next",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "Overlay: "
+                    + option_name(
+                        overlays,
+                        job.get("telegram_overlay_id"),
+                        "Not configured",
+                    ),
+                    callback_data="rp:over:next",
+                )
+            ],
             [
                 InlineKeyboardButton(
                     selected("Top left", position == "tl"),
@@ -196,9 +242,21 @@ def draft_summary(job: dict) -> str:
     else:
         delay = int(job.get("telegram_delay", 0))
         timing = "Post now" if delay == 0 else f"Delay: {delay} minutes"
+    account_name = option_name(
+        account_options(),
+        job.get("telegram_account_id"),
+        "Not configured",
+    )
+    overlay_name = option_name(
+        overlay_options(),
+        job.get("telegram_overlay_id"),
+        "Not configured",
+    )
     return (
         "Reel ready.\n"
-        f"Logo: {position}, {int(job.get('telegram_size', 16))}%\n"
+        f"Account: {account_name}\n"
+        f"Overlay: {overlay_name}\n"
+        f"Placement: {position}, {int(job.get('telegram_size', 16))}%\n"
         f"Destination: {destination}\n"
         f"{timing}\n\n"
         "Use /caption followed by new text to replace the caption.\n"
@@ -282,6 +340,8 @@ async def reel_url_message(
         await reject_unauthorized(update)
         return
     text = (update.effective_message.text or "").strip()
+    accounts = account_options()
+    overlays = overlay_options()
     try:
         job = reelposter.create_prepare_job(
             text,
@@ -294,6 +354,8 @@ async def reel_url_message(
                 "telegram_delay": 0,
                 "telegram_scheduled_at": None,
                 "telegram_controls_sent": False,
+                "telegram_account_id": accounts[0]["id"] if accounts else None,
+                "telegram_overlay_id": overlays[0]["id"] if overlays else None,
             },
         )
     except reelposter.ReelPosterError as exc:
@@ -431,6 +493,22 @@ async def control_callback(
     _, action, value = query.data.split(":", 2)
     if action == "pos" and value in POSITION_PRESETS:
         reelposter.update_job(job["id"], telegram_position=value)
+    elif action == "acct" and value == "next":
+        reelposter.update_job(
+            job["id"],
+            telegram_account_id=next_option_id(
+                account_options(),
+                job.get("telegram_account_id"),
+            ),
+        )
+    elif action == "over" and value == "next":
+        reelposter.update_job(
+            job["id"],
+            telegram_overlay_id=next_option_id(
+                overlay_options(),
+                job.get("telegram_overlay_id"),
+            ),
+        )
     elif action == "size" and value in {"10", "16", "22", "28"}:
         reelposter.update_job(job["id"], telegram_size=int(value))
     elif action == "dest" and value in {"grid", "reels-only"}:
@@ -469,6 +547,8 @@ async def publish_callback(query, job: dict) -> None:
             scheduled_at=job.get("telegram_scheduled_at"),
             destination=job.get("telegram_destination", "grid"),
             placement_mode="center-v2",
+            account_id=job.get("telegram_account_id"),
+            overlay_id=job.get("telegram_overlay_id"),
         )
     except reelposter.ReelPosterError as exc:
         await query.edit_message_text(f"Could not queue the Reel:\n{exc}")

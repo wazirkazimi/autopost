@@ -29,8 +29,11 @@ DATA_DIR_VALUE = os.getenv("REELPOSTER_DATA_DIR", "").strip()
 DATA_DIR = Path(DATA_DIR_VALUE or BASE_DIR / "data").resolve()
 JOBS_DIR = DATA_DIR / "jobs"
 JOBS_STATE_PATH = DATA_DIR / "jobs.json"
+ACCOUNTS_STATE_PATH = DATA_DIR / "accounts.json"
+OVERLAYS_STATE_PATH = DATA_DIR / "overlays.json"
+OVERLAYS_DIR = DATA_DIR / "overlays"
 ENV_PATH = BASE_DIR / ".env"
-APP_VERSION = "2026.06.11-telegram-v1"
+APP_VERSION = "2026.06.11-profiles-v1"
 ALLOWED_LOGO_EXTENSIONS = {".png", ".gif"}
 ALLOWED_DELAYS = {0, 15, 30, 60}
 SETTINGS_KEYS = (
@@ -54,6 +57,7 @@ STAGE_LABELS = {
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
+OVERLAYS_DIR.mkdir(parents=True, exist_ok=True)
 load_dotenv(ENV_PATH, override=True)
 
 app = Flask(__name__)
@@ -61,6 +65,7 @@ app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
 jobs: dict[str, dict] = {}
 jobs_lock = threading.RLock()
+profiles_lock = threading.RLock()
 executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="reelposter")
 publish_timers: dict[str, threading.Timer] = {}
 
@@ -122,6 +127,25 @@ def normalize_access_token(value: str) -> str:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def read_json_list(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+
+
+def write_json_list(path: Path, payload: list[dict]) -> None:
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    temporary_path.write_text(
+        json.dumps(payload, ensure_ascii=True, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(temporary_path, path)
 
 
 def persist_jobs() -> None:
@@ -208,6 +232,10 @@ def public_job(job: dict) -> dict:
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at"),
         "share_to_feed": job.get("share_to_feed", True),
+        "account_id": job.get("account_id"),
+        "account_name": job.get("account_name"),
+        "overlay_id": job.get("overlay_id"),
+        "overlay_name": job.get("overlay_name"),
         "logo_placement": {
             "mode": job.get("placement_mode"),
             "size_percent": job.get("logo_size_percent"),
@@ -359,21 +387,186 @@ def current_logo_path() -> Path | None:
     return None
 
 
-def require_settings() -> dict[str, str]:
+def environment_account() -> dict | None:
     load_dotenv(ENV_PATH, override=True)
     values = {key: os.getenv(key, "").strip() for key in SETTINGS_KEYS}
+    values["IG_ACCESS_TOKEN"] = normalize_access_token(values["IG_ACCESS_TOKEN"])
+    if not all(values.values()):
+        return None
+    return {
+        "id": "environment",
+        "name": os.getenv(
+            "REELPOSTER_DEFAULT_ACCOUNT_NAME",
+            "Environment account",
+        ).strip()
+        or "Environment account",
+        **values,
+    }
+
+
+def account_profiles() -> list[dict]:
+    with profiles_lock:
+        profiles = read_json_list(ACCOUNTS_STATE_PATH)
+    environment = environment_account()
+    return ([environment] if environment else []) + profiles
+
+
+def public_account(profile: dict) -> dict:
+    return {
+        "id": profile["id"],
+        "name": profile.get("name") or "Instagram account",
+        "ig_user_id": profile.get("IG_USER_ID", ""),
+        "source": "environment" if profile["id"] == "environment" else "saved",
+    }
+
+
+def resolve_account_settings(account_id: str | None = None) -> dict[str, str]:
+    profiles = account_profiles()
+    if not profiles:
+        raise ReelPosterError("Add an Instagram publishing account in Setup.")
+    profile = next(
+        (item for item in profiles if item["id"] == account_id),
+        profiles[0] if not account_id else None,
+    )
+    if not profile:
+        raise ReelPosterError("The selected Instagram account no longer exists.")
+    values = {key: str(profile.get(key, "")).strip() for key in SETTINGS_KEYS}
     values["IG_ACCESS_TOKEN"] = normalize_access_token(values["IG_ACCESS_TOKEN"])
     missing = [key for key, value in values.items() if not value]
     if missing:
         raise ReelPosterError(
-            "Finish Setup before posting. Missing: " + ", ".join(missing)
+            "The selected account is incomplete. Missing: " + ", ".join(missing)
         )
     if not values["IG_ACCESS_TOKEN"].startswith(("IGAA", "IGQ", "EAA")):
         raise ReelPosterError(
-            "The Instagram access token format is invalid. Paste only the token "
-            "value, without IG_ACCESS_TOKEN= or quotation marks."
+            "The selected account has an invalid Instagram access token."
         )
-    return values
+    return {
+        **values,
+        "ACCOUNT_ID": profile["id"],
+        "ACCOUNT_NAME": profile.get("name") or "Instagram account",
+    }
+
+
+def save_account_profile(data) -> dict:
+    name = str(data.get("name", "")).strip()
+    if not name:
+        raise ReelPosterError("Enter an account name.")
+    values = {key: str(data.get(key, "")).strip() for key in SETTINGS_KEYS}
+    values["IG_ACCESS_TOKEN"] = normalize_access_token(values["IG_ACCESS_TOKEN"])
+    missing = [key for key, value in values.items() if not value]
+    if missing:
+        raise ReelPosterError(
+            "Complete all account credentials. Missing: " + ", ".join(missing)
+        )
+    if not values["IG_ACCESS_TOKEN"].startswith(("IGAA", "IGQ", "EAA")):
+        raise ReelPosterError("The Instagram access token format is invalid.")
+    now = utc_now()
+    profile = {
+        "id": uuid.uuid4().hex[:12],
+        "name": name[:80],
+        **values,
+        "created_at": now,
+        "updated_at": now,
+    }
+    with profiles_lock:
+        profiles = read_json_list(ACCOUNTS_STATE_PATH)
+        profiles.append(profile)
+        write_json_list(ACCOUNTS_STATE_PATH, profiles)
+    return profile
+
+
+def update_account_profile_user_id(account_id: str, user_id: str) -> None:
+    with profiles_lock:
+        profiles = read_json_list(ACCOUNTS_STATE_PATH)
+        for profile in profiles:
+            if profile.get("id") == account_id:
+                profile["IG_USER_ID"] = user_id
+                profile["updated_at"] = utc_now()
+                write_json_list(ACCOUNTS_STATE_PATH, profiles)
+                return
+
+
+def overlay_profiles() -> list[dict]:
+    with profiles_lock:
+        saved = read_json_list(OVERLAYS_STATE_PATH)
+    result = []
+    legacy_path = current_logo_path()
+    if legacy_path:
+        result.append(
+            {
+                "id": "default",
+                "name": "Default overlay",
+                "file_name": legacy_path.name,
+                "legacy": True,
+            }
+        )
+    for profile in saved:
+        path = OVERLAYS_DIR / str(profile.get("file_name", ""))
+        if path.is_file():
+            result.append(profile)
+    return result
+
+
+def public_overlay(profile: dict) -> dict:
+    overlay_id = profile["id"]
+    return {
+        "id": overlay_id,
+        "name": profile.get("name") or "Overlay",
+        "url": (
+            "/api/logo"
+            if overlay_id == "default"
+            else f"/api/overlays/{overlay_id}/file"
+        ),
+        "animated": str(profile.get("file_name", "")).lower().endswith(".gif"),
+    }
+
+
+def resolve_overlay_path(overlay_id: str | None = None) -> tuple[Path, dict]:
+    profiles = overlay_profiles()
+    if not profiles:
+        raise ReelPosterError("Upload a PNG or GIF overlay in Setup.")
+    profile = next(
+        (item for item in profiles if item["id"] == overlay_id),
+        profiles[0] if not overlay_id else None,
+    )
+    if not profile:
+        raise ReelPosterError("The selected overlay no longer exists.")
+    path = (
+        current_logo_path()
+        if profile["id"] == "default"
+        else OVERLAYS_DIR / profile["file_name"]
+    )
+    if not path or not path.is_file():
+        raise ReelPosterError("The selected overlay file is unavailable.")
+    return path, profile
+
+
+def save_overlay_profile(upload, name: str) -> dict:
+    filename = secure_filename(upload.filename or "")
+    extension = Path(filename).suffix.lower()
+    if extension not in ALLOWED_LOGO_EXTENSIONS:
+        raise ReelPosterError("Overlay must be a PNG or GIF file.")
+    overlay_id = uuid.uuid4().hex[:12]
+    file_name = f"{overlay_id}{extension}"
+    upload.save(OVERLAYS_DIR / file_name)
+    now = utc_now()
+    profile = {
+        "id": overlay_id,
+        "name": (name.strip() or Path(filename).stem or "Overlay")[:80],
+        "file_name": file_name,
+        "created_at": now,
+        "updated_at": now,
+    }
+    with profiles_lock:
+        profiles = read_json_list(OVERLAYS_STATE_PATH)
+        profiles.append(profile)
+        write_json_list(OVERLAYS_STATE_PATH, profiles)
+    return profile
+
+
+def require_settings() -> dict[str, str]:
+    return resolve_account_settings()
 
 
 def probe_video_dimensions(path: Path) -> tuple[int, int]:
@@ -560,9 +753,13 @@ def verify_instagram_credentials(settings: dict[str, str]) -> dict:
     if returned_id and returned_id != settings["IG_USER_ID"]:
         if instagram_login:
             settings["IG_USER_ID"] = returned_id
-            ENV_PATH.touch(exist_ok=True)
-            set_key(str(ENV_PATH), "IG_USER_ID", returned_id, quote_mode="always")
-            os.environ["IG_USER_ID"] = returned_id
+            account_id = settings.get("ACCOUNT_ID", "environment")
+            if account_id == "environment":
+                ENV_PATH.touch(exist_ok=True)
+                set_key(str(ENV_PATH), "IG_USER_ID", returned_id, quote_mode="always")
+                os.environ["IG_USER_ID"] = returned_id
+            else:
+                update_account_profile_user_id(account_id, returned_id)
         else:
             raise ReelPosterError(
                 "IG_USER_ID does not match this access token. Use the Instagram "
@@ -735,14 +932,14 @@ def process_reel(
     delay_minutes: int,
     scheduled_at: datetime | None,
     share_to_feed: bool,
+    account_id: str | None = None,
+    overlay_id: str | None = None,
 ) -> None:
     try:
-        settings = require_settings()
+        settings = resolve_account_settings(account_id)
         add_event(job_id, "Checking Instagram credentials...")
         verify_instagram_credentials(settings)
-        logo_path = current_logo_path()
-        if not logo_path:
-            raise ReelPosterError("Upload a PNG or GIF logo in Setup before posting.")
+        logo_path, overlay = resolve_overlay_path(overlay_id)
 
         job = get_job_or_404(job_id)
         if not job or not job.get("source_path"):
@@ -773,6 +970,10 @@ def process_reel(
             logo_size_percent=size_percent,
             logo_x_center_percent=x_center_percent,
             logo_y_center_percent=y_center_percent,
+            account_id=settings["ACCOUNT_ID"],
+            account_name=settings["ACCOUNT_NAME"],
+            overlay_id=overlay["id"],
+            overlay_name=overlay.get("name") or "Overlay",
         )
 
         if schedule_instagram_publish(job_id, scheduled_at, delay_minutes):
@@ -784,11 +985,11 @@ def process_reel(
 
 def publish_uploaded_reel(job_id: str) -> None:
     try:
-        settings = require_settings()
-        verify_instagram_credentials(settings)
         job = get_job_or_404(job_id)
         if not job or not job.get("cloudinary_url"):
             raise ReelPosterError("The uploaded Reel is no longer available.")
+        settings = resolve_account_settings(job.get("account_id"))
+        verify_instagram_credentials(settings)
 
         update_job(
             job_id,
@@ -868,6 +1069,8 @@ def queue_post_job(
     scheduled_at: str | datetime | None = None,
     destination: str = "grid",
     placement_mode: str = "center-v2",
+    account_id: str | None = None,
+    overlay_id: str | None = None,
 ) -> dict:
     with jobs_lock:
         job = jobs.get(job_id)
@@ -910,6 +1113,8 @@ def queue_post_job(
     if destination not in {"grid", "reels-only"}:
         raise ReelPosterError("Choose a valid Instagram destination.")
     share_to_feed = destination == "grid"
+    account = resolve_account_settings(account_id)
+    _, overlay = resolve_overlay_path(overlay_id)
 
     update_job(
         job_id,
@@ -920,6 +1125,10 @@ def queue_post_job(
         logo_size_percent=size_percent,
         logo_x_center_percent=x_center_percent,
         logo_y_center_percent=y_center_percent,
+        account_id=account["ACCOUNT_ID"],
+        account_name=account["ACCOUNT_NAME"],
+        overlay_id=overlay["id"],
+        overlay_name=overlay.get("name") or "Overlay",
         status="watermarking",
         active_stage="watermark",
         error=None,
@@ -934,6 +1143,8 @@ def queue_post_job(
         delay_minutes,
         scheduled_at,
         share_to_feed,
+        account["ACCOUNT_ID"],
+        overlay["id"],
     )
     return public_job(get_job_or_404(job_id))
 
@@ -1030,8 +1241,10 @@ def health():
             "job_queue": True,
             "job_overview": True,
             "ffmpeg": bool(ffmpeg),
-            "configured": all(os.getenv(key, "").strip() for key in SETTINGS_KEYS),
-            "logo": current_logo_path() is not None,
+            "configured": bool(account_profiles()),
+            "logo": bool(overlay_profiles()),
+            "account_profiles": len(account_profiles()),
+            "overlay_profiles": len(overlay_profiles()),
             "telegram": {
                 "configured": bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip()),
                 "allowed_users": len(allowed_telegram_users),
@@ -1059,8 +1272,57 @@ def get_settings():
             "app_timezone": os.getenv("APP_TIMEZONE", "Asia/Kolkata"),
             "graph_api_version": os.getenv("IG_GRAPH_API_VERSION", "v25.0"),
             "logo_url": "/api/logo" if current_logo_path() else None,
+            "accounts": [public_account(item) for item in account_profiles()],
+            "overlays": [public_overlay(item) for item in overlay_profiles()],
         }
     )
+
+
+@app.get("/api/accounts")
+def list_accounts():
+    return jsonify(
+        {"accounts": [public_account(item) for item in account_profiles()]}
+    )
+
+
+@app.post("/api/accounts")
+def create_account():
+    try:
+        profile = save_account_profile(request.form)
+    except ReelPosterError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "account": public_account(profile)}), 201
+
+
+@app.get("/api/overlays")
+def list_overlays():
+    return jsonify(
+        {"overlays": [public_overlay(item) for item in overlay_profiles()]}
+    )
+
+
+@app.post("/api/overlays")
+def create_overlay():
+    upload = request.files.get("overlay")
+    if not upload or not upload.filename:
+        return jsonify({"error": "Choose a PNG or GIF overlay."}), 400
+    try:
+        profile = save_overlay_profile(
+            upload,
+            request.form.get("name", ""),
+        )
+    except ReelPosterError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "overlay": public_overlay(profile)}), 201
+
+
+@app.get("/api/overlays/<overlay_id>/file")
+def get_overlay_file(overlay_id: str):
+    try:
+        path, _ = resolve_overlay_path(overlay_id)
+    except ReelPosterError as exc:
+        return jsonify({"error": str(exc)}), 404
+    return send_file(path)
 
 
 @app.post("/api/settings")
@@ -1188,6 +1450,8 @@ def start_post(job_id: str):
             scheduled_at=payload.get("scheduled_at"),
             destination=payload.get("destination", "grid"),
             placement_mode=payload.get("placement_mode"),
+            account_id=payload.get("account_id"),
+            overlay_id=payload.get("overlay_id"),
         )
     except JobNotFoundError as exc:
         return jsonify({"error": str(exc)}), 404

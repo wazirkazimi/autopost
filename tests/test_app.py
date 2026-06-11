@@ -1,6 +1,7 @@
+import io
+import os
 import tempfile
 import unittest
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -206,6 +207,53 @@ class ReelPosterTests(unittest.TestCase):
         self.assertEqual(saved["telegram_user_id"], 456)
         self.assertEqual(saved["status"], "queued")
 
+    def test_account_profile_endpoint_saves_without_returning_secrets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state_path = Path(temporary) / "accounts.json"
+            with (
+                patch.object(reelposter, "ACCOUNTS_STATE_PATH", state_path),
+                patch.object(reelposter, "environment_account", return_value=None),
+            ):
+                response = self.client.post(
+                    "/api/accounts",
+                    data={
+                        "name": "Second account",
+                        "CLOUDINARY_CLOUD_NAME": "cloud",
+                        "CLOUDINARY_API_KEY": "key",
+                        "CLOUDINARY_API_SECRET": "secret",
+                        "IG_USER_ID": "123456",
+                        "IG_ACCESS_TOKEN": "IGAA-test-token-value",
+                    },
+                )
+                listed = self.client.get("/api/accounts").get_json()["accounts"]
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(listed[0]["name"], "Second account")
+        self.assertNotIn("IG_ACCESS_TOKEN", response.get_json()["account"])
+        self.assertTrue(state_path.exists() or listed)
+
+    def test_overlay_endpoint_adds_selectable_gif(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            overlay_dir = Path(temporary) / "overlays"
+            overlay_dir.mkdir()
+            state_path = Path(temporary) / "overlays.json"
+            with (
+                patch.object(reelposter, "OVERLAYS_DIR", overlay_dir),
+                patch.object(reelposter, "OVERLAYS_STATE_PATH", state_path),
+                patch.object(reelposter, "current_logo_path", return_value=None),
+            ):
+                response = self.client.post(
+                    "/api/overlays",
+                    data={
+                        "name": "Animated mark",
+                        "overlay": (io.BytesIO(b"GIF89a"), "mark.gif"),
+                    },
+                    content_type="multipart/form-data",
+                )
+                listed = self.client.get("/api/overlays").get_json()["overlays"]
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(listed[0]["name"], "Animated mark")
+        self.assertTrue(listed[0]["animated"])
+
     def test_post_validates_caption_length(self):
         job_id = "test-job"
         with reelposter.jobs_lock:
@@ -282,6 +330,51 @@ class ReelPosterTests(unittest.TestCase):
         args = submit.call_args.args
         self.assertEqual(args[4], 24.5)
         self.assertEqual(args[5], 31.25)
+
+    def test_post_passes_selected_account_and_overlay(self):
+        job_id = "profile-selection-job"
+        with reelposter.jobs_lock:
+            reelposter.jobs[job_id] = {
+                "id": job_id,
+                "status": "ready",
+                "active_stage": None,
+                "source_path": str(Path(tempfile.gettempdir()) / "source.mp4"),
+                "source_url": "https://www.instagram.com/reel/ABC123/",
+                "caption": "",
+                "events": [],
+                "created_at": reelposter.utc_now(),
+                "updated_at": reelposter.utc_now(),
+            }
+        account = {
+            "ACCOUNT_ID": "account-2",
+            "ACCOUNT_NAME": "Second account",
+        }
+        overlay = {"id": "overlay-2", "name": "Blue mark"}
+        with (
+            patch.object(reelposter, "resolve_account_settings", return_value=account),
+            patch.object(
+                reelposter,
+                "resolve_overlay_path",
+                return_value=(Path("mark.png"), overlay),
+            ),
+            patch.object(reelposter.executor, "submit") as submit,
+        ):
+            response = self.client.post(
+                f"/api/reels/{job_id}/post",
+                json={
+                    "placement_mode": "center-v2",
+                    "x_center_percent": 80,
+                    "y_center_percent": 36,
+                    "size_percent": 16,
+                    "destination": "grid",
+                    "account_id": "account-2",
+                    "overlay_id": "overlay-2",
+                },
+            )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(submit.call_args.args[-2:], ("account-2", "overlay-2"))
+        self.assertEqual(reelposter.jobs[job_id]["account_name"], "Second account")
+        self.assertEqual(reelposter.jobs[job_id]["overlay_name"], "Blue mark")
 
     def test_post_rejects_outdated_placement_contract(self):
         job_id = "outdated-placement-job"

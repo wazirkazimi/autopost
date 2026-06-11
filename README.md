@@ -55,6 +55,22 @@ Grid + Reels or Reels-only, and supports a 0/15/30/60 minute delay. Use
 The web UI remains the best option for exact drag positioning. Telegram uses
 four reliable corner presets.
 
+## Multiple accounts and overlays
+
+The credentials configured through environment variables appear as the
+**Environment account**. Add more publishing profiles from Setup; each profile
+can have its own Instagram Business Account ID, access token, and Cloudinary
+credentials.
+
+Upload multiple PNG or GIF overlays from Setup. Choose the publishing account
+and overlay for each Reel from the web dropdowns. In Telegram, tap the Account
+or Overlay button to cycle through the saved choices before publishing.
+
+Saved account profiles, overlay metadata, and overlay files live under `data/`.
+On Render, that directory is backed by the persistent disk configured in
+`render.yaml`. API responses never return saved access tokens or Cloudinary
+secrets.
+
 ## Publishing flow
 
 1. Paste a public Instagram Reel URL and fetch it.
