@@ -7,7 +7,6 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn --workers 1 --threads 8 --timeout 0 --bind 0.0.0.0:$PORT render_app:application
     healthCheckPath: /api/health
-    maxShutdownDelaySeconds: 300
     disk:
       name: reelposter-data
       mountPath: /opt/render/project/src/data
