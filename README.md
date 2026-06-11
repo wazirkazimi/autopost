@@ -55,6 +55,37 @@ Grid + Reels or Reels-only, and supports a 0/15/30/60 minute delay. Use
 The web UI remains the best option for exact drag positioning. Telegram uses
 four reliable corner presets.
 
+## Instagram DM intake
+
+ReelPoster can receive Reel submissions through Instagram Messaging and place
+them in an approval queue. It never publishes directly from a DM.
+
+1. Deploy ReelPoster to Render and set `META_WEBHOOK_VERIFY_TOKEN` to a long
+   random value.
+2. Set `META_APP_SECRET` to the App Secret from the Meta developer dashboard.
+3. In the Meta app's Instagram webhook settings, use:
+   `https://YOUR-RENDER-DOMAIN/webhooks/instagram`
+4. Enter the same verify token and subscribe the connected Instagram
+   professional account to message webhook events.
+5. Send a Reel or video to the account by DM. The sender's Instagram-scoped ID
+   appears in ReelPoster Setup as **Seen, not allowed**.
+6. Add that ID to **Allowed Instagram DM sender IDs**, save Setup, and ask the
+   sender to send the Reel again.
+7. Open Jobs and click **Review & edit**. Adjust the caption, account, overlay,
+   position, destination, delay, or schedule before publishing.
+
+Webhook requests are validated with `X-Hub-Signature-256` using the Meta App
+Secret. Unknown senders are recorded for discovery but their media is ignored.
+Duplicate webhook deliveries are ignored by message ID. Direct attachment
+downloads are restricted to trusted Meta and Instagram domains and capped at
+500 MB.
+
+Public Reel URLs and downloadable video attachments are supported. Ephemeral
+media and private shares without an accessible media URL cannot be downloaded;
+ask the sender to send the video file or a public Reel URL instead. Production
+use with people outside your Meta app's roles can require Meta App Review and
+the relevant Instagram messaging and content-publishing permissions.
+
 ## Multiple accounts and overlays
 
 The credentials configured through environment variables appear as the
@@ -108,7 +139,8 @@ persistent disk needed for logos, job state, and downloaded media.
 1. Push this repository to a private GitHub repository.
 2. In Render, choose **New > Blueprint** and select the repository.
 3. Render reads `render.yaml` and asks for the secret environment values.
-4. Enter the Cloudinary, Instagram, and Telegram values from `.env.example`.
+4. Enter the Cloudinary, Instagram, Telegram, and Meta webhook values from
+   `.env.example`.
    Set `REELPOSTER_WEB_PASSWORD` to a long, unique password. The username
    defaults to `reelposter`.
 5. Deploy, open the Render URL once, and upload the logo on the Setup page.

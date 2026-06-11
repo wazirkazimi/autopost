@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import os
 import re
 import secrets
@@ -31,11 +33,22 @@ JOBS_DIR = DATA_DIR / "jobs"
 JOBS_STATE_PATH = DATA_DIR / "jobs.json"
 ACCOUNTS_STATE_PATH = DATA_DIR / "accounts.json"
 OVERLAYS_STATE_PATH = DATA_DIR / "overlays.json"
+DM_SENDERS_STATE_PATH = DATA_DIR / "dm_senders.json"
+DM_CONFIG_STATE_PATH = DATA_DIR / "dm_config.json"
 OVERLAYS_DIR = DATA_DIR / "overlays"
 ENV_PATH = BASE_DIR / ".env"
-APP_VERSION = "2026.06.11-counts-v1"
+APP_VERSION = "2026.06.11-dm-intake-v1"
 ALLOWED_LOGO_EXTENSIONS = {".png", ".gif"}
 ALLOWED_DELAYS = {0, 15, 30, 60}
+MAX_DM_MEDIA_BYTES = 500 * 1024 * 1024
+ALLOWED_DM_ATTACHMENT_TYPES = {"video", "share", "ig_reel", "reel"}
+TRUSTED_META_MEDIA_DOMAINS = (
+    "instagram.com",
+    "cdninstagram.com",
+    "facebook.com",
+    "fbcdn.net",
+    "fbsbx.com",
+)
 SETTINGS_KEYS = (
     "CLOUDINARY_CLOUD_NAME",
     "CLOUDINARY_API_KEY",
@@ -46,6 +59,11 @@ SETTINGS_KEYS = (
 OPTIONAL_SETTINGS_KEYS = (
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_ALLOWED_USER_IDS",
+)
+DM_SETTINGS_KEYS = (
+    "META_WEBHOOK_VERIFY_TOKEN",
+    "META_APP_SECRET",
+    "IG_DM_ALLOWED_SENDER_IDS",
 )
 STAGES = ("download", "watermark", "upload", "post")
 STAGE_LABELS = {
@@ -73,7 +91,8 @@ publish_timers: dict[str, threading.Timer] = {}
 @app.before_request
 def require_web_auth():
     password = os.getenv("REELPOSTER_WEB_PASSWORD", "").strip()
-    if not password or request.path == "/api/health":
+    public_paths = {"/api/health", "/webhooks/instagram"}
+    if not password or request.path in public_paths:
         return None
 
     username = os.getenv("REELPOSTER_WEB_USERNAME", "reelposter").strip()
@@ -146,6 +165,135 @@ def write_json_list(path: Path, payload: list[dict]) -> None:
         encoding="utf-8",
     )
     os.replace(temporary_path, path)
+
+
+def allowed_dm_sender_ids() -> set[str]:
+    configured = {
+        value.strip()
+        for value in os.getenv("IG_DM_ALLOWED_SENDER_IDS", "").split(",")
+        if value.strip()
+    }
+    if DM_CONFIG_STATE_PATH.exists():
+        try:
+            saved = json.loads(DM_CONFIG_STATE_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            saved = {}
+        configured.update(
+            str(value).strip()
+            for value in saved.get("allowed_sender_ids", [])
+            if str(value).strip()
+        )
+    return configured
+
+
+def save_dm_sender_ids(sender_ids: list[str]) -> None:
+    temporary_path = DM_CONFIG_STATE_PATH.with_suffix(".json.tmp")
+    temporary_path.write_text(
+        json.dumps(
+            {"allowed_sender_ids": sender_ids},
+            ensure_ascii=True,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    os.replace(temporary_path, DM_CONFIG_STATE_PATH)
+
+
+def record_dm_sender(sender_id: str) -> None:
+    if not sender_id:
+        return
+    with profiles_lock:
+        senders = read_json_list(DM_SENDERS_STATE_PATH)
+        existing = next(
+            (item for item in senders if item.get("id") == sender_id),
+            None,
+        )
+        if existing:
+            existing["last_seen_at"] = utc_now()
+        else:
+            senders.append(
+                {
+                    "id": sender_id,
+                    "first_seen_at": utc_now(),
+                    "last_seen_at": utc_now(),
+                }
+            )
+        write_json_list(DM_SENDERS_STATE_PATH, senders[-50:])
+
+
+def public_dm_senders() -> list[dict]:
+    allowed = allowed_dm_sender_ids()
+    with profiles_lock:
+        senders = read_json_list(DM_SENDERS_STATE_PATH)
+    return [
+        {
+            "id": str(item.get("id", "")),
+            "first_seen_at": item.get("first_seen_at"),
+            "last_seen_at": item.get("last_seen_at"),
+            "allowed": str(item.get("id", "")) in allowed,
+        }
+        for item in sorted(
+            senders,
+            key=lambda item: item.get("last_seen_at", ""),
+            reverse=True,
+        )
+        if item.get("id")
+    ]
+
+
+def verify_meta_signature(raw_body: bytes, signature: str | None) -> bool:
+    app_secret = os.getenv("META_APP_SECRET", "").strip()
+    if not app_secret or not signature or not signature.startswith("sha256="):
+        return False
+    expected = "sha256=" + hmac.new(
+        app_secret.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+def trusted_meta_media_url(value: str) -> str:
+    value = str(value or "").strip()
+    try:
+        parsed = urlparse(value)
+    except ValueError as exc:
+        raise ReelPosterError("The DM attachment URL is invalid.") from exc
+    host = (parsed.hostname or "").lower()
+    trusted = any(
+        host == domain or host.endswith(f".{domain}")
+        for domain in TRUSTED_META_MEDIA_DOMAINS
+    )
+    if parsed.scheme != "https" or not trusted:
+        raise ReelPosterError(
+            "Instagram sent an untrusted media attachment URL."
+        )
+    return value
+
+
+def instagram_reel_url_from_text(value: str) -> str | None:
+    for candidate in re.findall(r"https?://[^\s<>\"]+", value or ""):
+        candidate = candidate.rstrip(".,);]")
+        try:
+            return validate_reel_url(candidate)
+        except ReelPosterError:
+            continue
+    return None
+
+
+def dm_caption_text(value: str) -> str:
+    without_urls = re.sub(r"https?://[^\s<>\"]+", "", value or "")
+    return re.sub(r"\s+", " ", without_urls).strip()
+
+
+def dm_message_seen(message_id: str) -> bool:
+    if not message_id:
+        return False
+    with jobs_lock:
+        return any(
+            job.get("dm_message_id") == message_id
+            for job in jobs.values()
+        )
 
 
 def persist_jobs() -> None:
@@ -241,6 +389,10 @@ def public_job(job: dict) -> dict:
         "account_name": job.get("account_name"),
         "overlay_id": job.get("overlay_id"),
         "overlay_name": job.get("overlay_name"),
+        "intake_source": job.get("intake_source", "web"),
+        "review_required": job.get("review_required", False),
+        "dm_sender_id": job.get("dm_sender_id"),
+        "dm_attachment_type": job.get("dm_attachment_type"),
         "logo_placement": {
             "mode": job.get("placement_mode"),
             "size_percent": job.get("logo_size_percent"),
@@ -343,6 +495,10 @@ def prepare_reel(job_id: str, reel_url: str) -> None:
 
         source_path = locate_downloaded_video(job_dir)
         caption = (info.get("description") or info.get("title") or "").strip()
+        job = get_job_or_404(job_id) or {}
+        submitted_caption = dm_caption_text(job.get("dm_text", ""))
+        if submitted_caption:
+            caption = submitted_caption
         update_job(
             job_id,
             status="ready",
@@ -350,9 +506,82 @@ def prepare_reel(job_id: str, reel_url: str) -> None:
             source_path=str(source_path),
             caption=caption,
         )
-        add_event(job_id, "Reel ready. Review the caption and posting options.")
+        if job.get("intake_source") == "instagram_dm":
+            add_event(
+                job_id,
+                "DM submission ready for admin review. Nothing will publish "
+                "until you approve it.",
+            )
+        else:
+            add_event(job_id, "Reel ready. Review the caption and posting options.")
     except Exception as exc:
         fail_job(job_id, normalize_error(exc))
+
+
+def prepare_direct_dm_media(
+    job_id: str,
+    media_url: str,
+    message_text: str,
+) -> None:
+    response = None
+    try:
+        update_job(job_id, status="downloading", active_stage="download")
+        add_event(job_id, "Downloading the video received through Instagram DM...")
+        media_url = trusted_meta_media_url(media_url)
+        response = requests.get(
+            media_url,
+            stream=True,
+            timeout=(15, 90),
+            headers={"User-Agent": "ReelPoster/1.0"},
+            allow_redirects=True,
+        )
+        response.raise_for_status()
+        trusted_meta_media_url(response.url or media_url)
+        content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+        if content_type and not (
+            content_type.startswith("video/")
+            or content_type == "application/octet-stream"
+        ):
+            raise ReelPosterError(
+                "The DM attachment is not a downloadable video. Ask the sender "
+                "to send the video file or a public Reel URL."
+            )
+        content_length = response.headers.get("content-length", "")
+        if content_length.isdigit() and int(content_length) > MAX_DM_MEDIA_BYTES:
+            raise ReelPosterError("The DM video is larger than 500 MB.")
+
+        job_dir = JOBS_DIR / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        source_path = job_dir / "source.mp4"
+        downloaded = 0
+        with source_path.open("wb") as output:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                downloaded += len(chunk)
+                if downloaded > MAX_DM_MEDIA_BYTES:
+                    raise ReelPosterError("The DM video is larger than 500 MB.")
+                output.write(chunk)
+        if downloaded == 0:
+            raise ReelPosterError("Instagram returned an empty DM video.")
+
+        update_job(
+            job_id,
+            status="ready",
+            active_stage=None,
+            source_path=str(source_path),
+            caption=dm_caption_text(message_text),
+        )
+        add_event(
+            job_id,
+            "DM submission ready for admin review. Nothing will publish until "
+            "you approve it.",
+        )
+    except Exception as exc:
+        fail_job(job_id, normalize_error(exc))
+    finally:
+        if response is not None:
+            response.close()
 
 
 def normalize_error(exc: Exception) -> Exception:
@@ -1063,7 +1292,8 @@ def create_prepare_job(reel_url: str, metadata: dict | None = None) -> dict:
             {
                 key: value
                 for key, value in metadata.items()
-                if key.startswith("telegram_")
+                if key.startswith(("telegram_", "dm_"))
+                or key in {"intake_source", "review_required"}
             }
         )
 
@@ -1072,6 +1302,192 @@ def create_prepare_job(reel_url: str, metadata: dict | None = None) -> dict:
         persist_jobs()
     executor.submit(prepare_reel, job_id, reel_url)
     return public_job(job)
+
+
+def create_dm_error_job(
+    sender_id: str,
+    recipient_id: str,
+    message_id: str,
+    message_text: str,
+    error: str,
+) -> dict:
+    job_id = uuid.uuid4().hex
+    now = utc_now()
+    job = {
+        "id": job_id,
+        "source_url": "",
+        "status": "error",
+        "active_stage": "download",
+        "message": error,
+        "error": error,
+        "caption": dm_caption_text(message_text),
+        "events": [
+            {
+                "time": now,
+                "message": "Instagram DM submission received.",
+            },
+            {"time": now, "message": f"Error: {error}"},
+        ],
+        "created_at": now,
+        "updated_at": now,
+        "intake_source": "instagram_dm",
+        "review_required": True,
+        "dm_sender_id": sender_id,
+        "dm_recipient_id": recipient_id,
+        "dm_message_id": message_id,
+        "dm_text": message_text,
+    }
+    with jobs_lock:
+        jobs[job_id] = job
+        persist_jobs()
+    return public_job(job)
+
+
+def create_dm_submission(
+    sender_id: str,
+    recipient_id: str,
+    message_id: str,
+    attachment_type: str,
+    media_url: str,
+    message_text: str = "",
+) -> dict | None:
+    sender_id = str(sender_id or "").strip()
+    recipient_id = str(recipient_id or "").strip()
+    message_id = str(message_id or "").strip()
+    if not sender_id or not message_id or dm_message_seen(message_id):
+        return None
+
+    record_dm_sender(sender_id)
+    if sender_id not in allowed_dm_sender_ids():
+        return None
+
+    metadata = {
+        "intake_source": "instagram_dm",
+        "review_required": True,
+        "dm_sender_id": sender_id,
+        "dm_recipient_id": recipient_id,
+        "dm_message_id": message_id,
+        "dm_attachment_type": attachment_type,
+        "dm_text": message_text,
+    }
+    reel_url = instagram_reel_url_from_text(message_text)
+    if not reel_url:
+        try:
+            reel_url = validate_reel_url(media_url)
+        except ReelPosterError:
+            reel_url = None
+    if reel_url:
+        return create_prepare_job(reel_url, metadata)
+
+    try:
+        media_url = trusted_meta_media_url(media_url)
+    except ReelPosterError as exc:
+        return create_dm_error_job(
+            sender_id,
+            recipient_id,
+            message_id,
+            message_text,
+            str(exc),
+        )
+
+    job_id = uuid.uuid4().hex
+    now = utc_now()
+    job = {
+        "id": job_id,
+        "source_url": media_url,
+        "status": "queued",
+        "active_stage": "download",
+        "message": "DM submission queued",
+        "error": None,
+        "caption": dm_caption_text(message_text),
+        "events": [
+            {
+                "time": now,
+                "message": "Instagram DM submission added to the review queue.",
+            }
+        ],
+        "created_at": now,
+        "updated_at": now,
+        **metadata,
+    }
+    with jobs_lock:
+        jobs[job_id] = job
+        persist_jobs()
+    executor.submit(
+        prepare_direct_dm_media,
+        job_id,
+        media_url,
+        message_text,
+    )
+    return public_job(job)
+
+
+def ingest_instagram_webhook(payload: dict) -> int:
+    accepted = 0
+    if payload.get("object") != "instagram":
+        return accepted
+
+    for entry in payload.get("entry", []):
+        if not isinstance(entry, dict):
+            continue
+        for event in entry.get("messaging", []):
+            if not isinstance(event, dict):
+                continue
+            message = event.get("message") or {}
+            if (
+                not isinstance(message, dict)
+                or message.get("is_echo")
+                or message.get("is_deleted")
+                or message.get("is_unsupported")
+            ):
+                continue
+            sender_id = str((event.get("sender") or {}).get("id", ""))
+            recipient_id = str((event.get("recipient") or {}).get("id", ""))
+            message_id = str(message.get("mid", ""))
+            message_text = str(message.get("text", ""))
+            if not sender_id or not message_id:
+                continue
+
+            record_dm_sender(sender_id)
+            if sender_id not in allowed_dm_sender_ids():
+                continue
+            if dm_message_seen(message_id):
+                continue
+
+            reel_url = instagram_reel_url_from_text(message_text)
+            attachment_type = "reel_url" if reel_url else ""
+            media_url = reel_url or ""
+            if not media_url:
+                for attachment in message.get("attachments", []):
+                    if not isinstance(attachment, dict):
+                        continue
+                    candidate_type = str(
+                        attachment.get("type", "")
+                    ).lower()
+                    candidate_url = str(
+                        (attachment.get("payload") or {}).get("url", "")
+                    ).strip()
+                    if (
+                        candidate_type in ALLOWED_DM_ATTACHMENT_TYPES
+                        and candidate_url
+                    ):
+                        attachment_type = candidate_type
+                        media_url = candidate_url
+                        break
+            if not media_url:
+                continue
+
+            result = create_dm_submission(
+                sender_id=sender_id,
+                recipient_id=recipient_id,
+                message_id=message_id,
+                attachment_type=attachment_type,
+                media_url=media_url,
+                message_text=message_text,
+            )
+            if result:
+                accepted += 1
+    return accepted
 
 
 def queue_post_job(
@@ -1151,6 +1567,7 @@ def queue_post_job(
         overlay_name=overlay.get("name") or "Overlay",
         hide_counts_requested=hide_counts_requested,
         manual_count_hiding_required=False,
+        review_required=False,
         status="watermarking",
         active_stage="watermark",
         error=None,
@@ -1267,6 +1684,16 @@ def health():
             "logo": bool(overlay_profiles()),
             "account_profiles": len(account_profiles()),
             "overlay_profiles": len(overlay_profiles()),
+            "instagram_dm": {
+                "configured": all(
+                    os.getenv(key, "").strip()
+                    for key in (
+                        "META_WEBHOOK_VERIFY_TOKEN",
+                        "META_APP_SECRET",
+                    )
+                ),
+                "allowed_senders": len(allowed_dm_sender_ids()),
+            },
             "telegram": {
                 "configured": bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip()),
                 "allowed_users": len(allowed_telegram_users),
@@ -1291,6 +1718,16 @@ def get_settings():
                 key: bool(os.getenv(key, "").strip())
                 for key in OPTIONAL_SETTINGS_KEYS
             },
+            "dm_configured": {
+                key: (
+                    bool(allowed_dm_sender_ids())
+                    if key == "IG_DM_ALLOWED_SENDER_IDS"
+                    else bool(os.getenv(key, "").strip())
+                )
+                for key in DM_SETTINGS_KEYS
+            },
+            "dm_senders": public_dm_senders(),
+            "dm_webhook_path": "/webhooks/instagram",
             "app_timezone": os.getenv("APP_TIMEZONE", "Asia/Kolkata"),
             "graph_api_version": os.getenv("IG_GRAPH_API_VERSION", "v25.0"),
             "logo_url": "/api/logo" if current_logo_path() else None,
@@ -1352,7 +1789,7 @@ def save_settings():
     data = request.form
     ENV_PATH.touch(exist_ok=True)
 
-    for key in SETTINGS_KEYS + OPTIONAL_SETTINGS_KEYS:
+    for key in SETTINGS_KEYS + OPTIONAL_SETTINGS_KEYS + DM_SETTINGS_KEYS:
         value = data.get(key, "").strip()
         if key == "IG_ACCESS_TOKEN":
             value = normalize_access_token(value)
@@ -1376,6 +1813,18 @@ def save_settings():
                         )
                     }
                 ), 400
+        if key == "IG_DM_ALLOWED_SENDER_IDS" and value:
+            sender_ids = [item.strip() for item in value.split(",")]
+            if not all(item.isdigit() for item in sender_ids):
+                return jsonify(
+                    {
+                        "error": (
+                            "Allowed Instagram DM sender IDs must be numeric "
+                            "and comma-separated."
+                        )
+                    }
+                ), 400
+            save_dm_sender_ids(sender_ids)
         if value:
             set_key(str(ENV_PATH), key, value, quote_mode="always")
 
@@ -1409,11 +1858,47 @@ def save_settings():
     telegram_changed = any(
         data.get(key, "").strip() for key in OPTIONAL_SETTINGS_KEYS
     )
+    dm_changed = any(data.get(key, "").strip() for key in DM_SETTINGS_KEYS)
     load_dotenv(ENV_PATH, override=True)
     message = "Setup saved locally."
     if telegram_changed:
         message += " Restart ReelPoster to apply Telegram bot changes."
+    if dm_changed:
+        message += (
+            " On Render, keep the verify token and App Secret in environment "
+            "variables so they survive deploys."
+        )
     return jsonify({"ok": True, "message": message})
+
+
+@app.get("/webhooks/instagram")
+def verify_instagram_webhook():
+    mode = request.args.get("hub.mode", "")
+    verify_token = request.args.get("hub.verify_token", "")
+    challenge = request.args.get("hub.challenge", "")
+    expected = os.getenv("META_WEBHOOK_VERIFY_TOKEN", "").strip()
+    if (
+        mode == "subscribe"
+        and expected
+        and secrets.compare_digest(verify_token, expected)
+    ):
+        return Response(challenge, mimetype="text/plain")
+    return Response("Webhook verification failed.", status=403)
+
+
+@app.post("/webhooks/instagram")
+def receive_instagram_webhook():
+    raw_body = request.get_data(cache=True)
+    if not verify_meta_signature(
+        raw_body,
+        request.headers.get("X-Hub-Signature-256"),
+    ):
+        return jsonify({"error": "Invalid webhook signature."}), 403
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Invalid webhook payload."}), 400
+    accepted = ingest_instagram_webhook(payload)
+    return jsonify({"ok": True, "accepted": accepted})
 
 
 @app.post("/api/settings/test")

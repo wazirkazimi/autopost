@@ -378,10 +378,14 @@
     .overview-progress span.error { background: var(--danger); }
 
     .overview-link {
+      padding: 0;
+      border: 0;
+      background: transparent;
       color: var(--accent-light);
       font-size: 10px;
       font-weight: 730;
       text-decoration: none;
+      cursor: pointer;
     }
 
     .overview-empty {
@@ -817,6 +821,13 @@
       text-decoration: none;
     }
 
+    .job-footer .review-job-button {
+      width: auto;
+      padding: 7px 10px;
+      color: var(--accent-light);
+      font-size: 10px;
+    }
+
     .jobs-empty {
       padding: 54px 24px;
       border: 1px dashed #343434;
@@ -1233,6 +1244,27 @@
             <p class="field-help">Use an IANA timezone name. Exact Telegram schedules use this timezone.</p>
           </div>
           <div class="field wide">
+            <label for="dmWebhookUrl">Instagram DM webhook callback URL</label>
+            <input id="dmWebhookUrl" type="text" readonly>
+            <p class="field-help">Paste this callback URL into your Meta app's Instagram webhook configuration.</p>
+          </div>
+          <div class="field">
+            <label for="metaVerifyToken">Meta webhook verify token</label>
+            <input id="metaVerifyToken" name="META_WEBHOOK_VERIFY_TOKEN" type="password" placeholder="Not saved yet" autocomplete="new-password">
+            <p class="field-help">Choose a long random value and enter the same value in Meta.</p>
+          </div>
+          <div class="field">
+            <label for="metaAppSecret">Meta App Secret</label>
+            <input id="metaAppSecret" name="META_APP_SECRET" type="password" placeholder="Not saved yet" autocomplete="new-password">
+            <p class="field-help">Used to validate X-Hub-Signature-256 on every DM webhook.</p>
+          </div>
+          <div class="field wide">
+            <label for="dmAllowedSenders">Allowed Instagram DM sender IDs</label>
+            <input id="dmAllowedSenders" name="IG_DM_ALLOWED_SENDER_IDS" type="text" placeholder="123456789012345">
+            <p class="field-help">Comma-separated Instagram-scoped IDs. Unknown senders are recorded below but their media is ignored.</p>
+            <div class="library-list" id="dmSenderLibrary"></div>
+          </div>
+          <div class="field wide">
             <label for="logo">Logo PNG or GIF</label>
             <div class="logo-row">
               <div class="logo-preview" id="logoPreview">No logo</div>
@@ -1429,7 +1461,10 @@
     function renderJobs(jobs) {
       const visibleJobs = jobs.filter(job => job.id !== state.jobId);
       const activeStatuses = new Set(["queued", "downloading", "watermarking", "uploading", "scheduled", "posting"]);
-      const activeCount = visibleJobs.filter(job => activeStatuses.has(job.status)).length;
+      const activeCount = visibleJobs.filter(job =>
+        activeStatuses.has(job.status) ||
+        (job.status === "ready" && job.review_required)
+      ).length;
       $("#jobsBadge").textContent = activeCount;
       $("#jobsBadge").classList.toggle("hidden", activeCount === 0);
       renderJobsOverview(visibleJobs);
@@ -1443,7 +1478,18 @@
         const created = job.created_at ? new Date(job.created_at).toLocaleString() : "Recently";
         const scheduled = job.publish_at ? `Scheduled ${new Date(job.publish_at).toLocaleString()}` : "";
         const statusClass = job.status === "done" ? "done" : job.status === "error" ? "error" : activeStatuses.has(job.status) ? "working" : "";
-        const title = job.status === "done" ? "Published Reel" : job.status === "scheduled" ? "Scheduled Reel" : job.status === "error" ? "Failed Reel" : "Posting Reel";
+        const title = job.status === "done"
+          ? "Published Reel"
+          : job.status === "scheduled"
+            ? "Scheduled Reel"
+            : job.status === "error"
+              ? "Failed Reel"
+              : job.status === "ready" && job.review_required
+                ? "DM submission"
+                : "Posting Reel";
+        const reviewAction = job.status === "ready" && job.review_required
+          ? `<button class="ghost-button review-job-button" type="button" data-review-job="${escapeHtml(job.id)}">Review &amp; edit</button>`
+          : "";
         return `
           <article class="job-card">
             <div class="job-card-top">
@@ -1458,12 +1504,17 @@
             </div>
             <p class="job-message">${escapeHtml(job.error || job.message || "Waiting...")}</p>
             <div class="job-footer">
-              <span>${escapeHtml(scheduled || (job.share_to_feed ? "Reels + profile grid" : "Reels only"))}</span>
+              <span>${job.intake_source === "instagram_dm" ? `Instagram DM · sender ${escapeHtml(job.dm_sender_id || "unknown")}` : escapeHtml(scheduled || (job.share_to_feed ? "Reels + profile grid" : "Reels only"))}</span>
+              ${reviewAction}
               ${job.permalink ? `<a href="${escapeHtml(job.permalink)}" target="_blank" rel="noreferrer">Open Reel</a>` : ""}
             </div>
           </article>
         `;
       }).join("");
+
+      $("#jobsList").querySelectorAll("[data-review-job]").forEach(button => {
+        button.addEventListener("click", () => reviewJob(button.dataset.reviewJob));
+      });
     }
 
     function renderJobsOverview(jobs) {
@@ -1479,7 +1530,9 @@
         const preview = job.thumbnail_url
           ? `<img src="${escapeHtml(job.thumbnail_url)}" alt="Reel preview" loading="lazy">`
           : `<div class="overview-preview-empty">Preview will appear after download.</div>`;
-        const action = job.permalink
+        const action = job.status === "ready" && job.review_required
+          ? `<button class="overview-link review-job-button" type="button" data-review-job="${escapeHtml(job.id)}">Review &amp; edit</button>`
+          : job.permalink
           ? `<a class="overview-link" href="${escapeHtml(job.permalink)}" target="_blank" rel="noreferrer">Open published Reel</a>`
           : `<a class="overview-link" href="#" data-open-jobs="true">View job details</a>`;
         return `
@@ -1505,6 +1558,25 @@
           showView("jobs");
         });
       });
+      overview.querySelectorAll("[data-review-job]").forEach(button => {
+        button.addEventListener("click", () => reviewJob(button.dataset.reviewJob));
+      });
+    }
+
+    async function reviewJob(jobId) {
+      try {
+        const job = await api(`/api/jobs/${jobId}`);
+        if (job.status !== "ready") {
+          throw new Error("This DM submission is not ready for review.");
+        }
+        state.jobId = job.id;
+        $("#reelUrl").value = job.source_url || "Instagram DM submission";
+        showView("create");
+        renderJob(job);
+        showToast("DM submission loaded. Review everything before publishing.");
+      } catch (error) {
+        showToast(error.message, true);
+      }
     }
 
     async function loadJobs() {
@@ -1661,7 +1733,10 @@
         IG_USER_ID: "#igUser",
         IG_ACCESS_TOKEN: "#igToken",
         TELEGRAM_BOT_TOKEN: "#telegramToken",
-        TELEGRAM_ALLOWED_USER_IDS: "#telegramUsers"
+        TELEGRAM_ALLOWED_USER_IDS: "#telegramUsers",
+        META_WEBHOOK_VERIFY_TOKEN: "#metaVerifyToken",
+        META_APP_SECRET: "#metaAppSecret",
+        IG_DM_ALLOWED_SENDER_IDS: "#dmAllowedSenders"
       };
       Object.entries(map).forEach(([key, selector]) => {
         if (configured[key]) $(selector).placeholder = "Saved locally ••••••••";
@@ -1734,7 +1809,19 @@
         $("#graphVersion").value = settings.graph_api_version || "v25.0";
         applyConfiguredPlaceholders(settings.configured);
         applyConfiguredPlaceholders(settings.telegram_configured || {});
+        applyConfiguredPlaceholders(settings.dm_configured || {});
         $("#appTimezone").value = settings.app_timezone || "Asia/Kolkata";
+        $("#dmWebhookUrl").value = `${window.location.origin}${settings.dm_webhook_path || "/webhooks/instagram"}`;
+        const allowedIds = (settings.dm_senders || []).filter(sender => sender.allowed).map(sender => sender.id);
+        if (allowedIds.length) $("#dmAllowedSenders").value = allowedIds.join(",");
+        $("#dmSenderLibrary").innerHTML = (settings.dm_senders || []).length
+          ? settings.dm_senders.map(sender => `
+            <div class="library-item">
+              <strong>${escapeHtml(sender.id)}</strong>
+              <span>${sender.allowed ? "Allowed" : "Seen, not allowed"} · ${sender.last_seen_at ? escapeHtml(new Date(sender.last_seen_at).toLocaleString()) : "Recently"}</span>
+            </div>
+          `).join("")
+          : `<div class="library-item"><span>No Instagram DM senders seen yet.</span></div>`;
         $("#setupState").textContent = state.configured && state.logo ? "Ready to post" : "Setup needed";
         $("#setupState").classList.toggle("ready", state.configured && state.logo);
         setCheck("#ffmpegCheck", health.ffmpeg, health.ffmpeg ? "FFmpeg ready" : "FFmpeg missing");

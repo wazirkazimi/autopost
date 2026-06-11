@@ -1,4 +1,7 @@
+import hashlib
+import hmac
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -41,6 +44,201 @@ class ReelPosterTests(unittest.TestCase):
                 },
             )
             self.assertEqual(response.status_code, 200)
+
+    def test_instagram_webhook_verification_is_public(self):
+        with patch.dict(
+            os.environ,
+            {
+                "REELPOSTER_WEB_PASSWORD": "test-password",
+                "META_WEBHOOK_VERIFY_TOKEN": "verify-me",
+            },
+        ):
+            response = self.client.get(
+                "/webhooks/instagram",
+                query_string={
+                    "hub.mode": "subscribe",
+                    "hub.verify_token": "verify-me",
+                    "hub.challenge": "challenge-value",
+                },
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_data(as_text=True), "challenge-value")
+
+    def test_instagram_webhook_rejects_invalid_signature(self):
+        with patch.dict(os.environ, {"META_APP_SECRET": "app-secret"}):
+            response = self.client.post(
+                "/webhooks/instagram",
+                data=b'{"object":"instagram"}',
+                content_type="application/json",
+                headers={"X-Hub-Signature-256": "sha256=invalid"},
+            )
+        self.assertEqual(response.status_code, 403)
+
+    def test_instagram_webhook_queues_allowlisted_reel_once(self):
+        payload = {
+            "object": "instagram",
+            "entry": [
+                {
+                    "messaging": [
+                        {
+                            "sender": {"id": "111"},
+                            "recipient": {"id": "222"},
+                            "message": {
+                                "mid": "message-1",
+                                "text": "Please post this",
+                                "attachments": [
+                                    {
+                                        "type": "ig_reel",
+                                        "payload": {
+                                            "url": (
+                                                "https://www.instagram.com/"
+                                                "reel/ABC123/"
+                                            )
+                                        },
+                                    }
+                                ],
+                            },
+                        }
+                    ]
+                }
+            ],
+        }
+        raw = json.dumps(payload, separators=(",", ":")).encode()
+        signature = "sha256=" + hmac.new(
+            b"app-secret",
+            raw,
+            hashlib.sha256,
+        ).hexdigest()
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "META_APP_SECRET": "app-secret",
+                    "IG_DM_ALLOWED_SENDER_IDS": "111",
+                },
+            ),
+            patch.object(reelposter, "record_dm_sender"),
+            patch.object(reelposter.executor, "submit") as submit,
+        ):
+            first = self.client.post(
+                "/webhooks/instagram",
+                data=raw,
+                content_type="application/json",
+                headers={"X-Hub-Signature-256": signature},
+            )
+            second = self.client.post(
+                "/webhooks/instagram",
+                data=raw,
+                content_type="application/json",
+                headers={"X-Hub-Signature-256": signature},
+            )
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.get_json()["accepted"], 1)
+        self.assertEqual(second.get_json()["accepted"], 0)
+        saved = next(iter(reelposter.jobs.values()))
+        self.assertEqual(saved["intake_source"], "instagram_dm")
+        self.assertTrue(saved["review_required"])
+        self.assertEqual(saved["dm_sender_id"], "111")
+        submit.assert_called_once()
+
+    def test_unknown_dm_sender_is_recorded_but_not_queued(self):
+        payload = {
+            "object": "instagram",
+            "entry": [
+                {
+                    "messaging": [
+                        {
+                            "sender": {"id": "999"},
+                            "recipient": {"id": "222"},
+                            "message": {
+                                "mid": "message-unknown",
+                                "text": (
+                                    "https://www.instagram.com/reel/ABC123/"
+                                ),
+                            },
+                        }
+                    ]
+                }
+            ],
+        }
+        with (
+            patch.dict(
+                os.environ,
+                {"IG_DM_ALLOWED_SENDER_IDS": "111"},
+            ),
+            patch.object(reelposter, "record_dm_sender") as record,
+        ):
+            accepted = reelposter.ingest_instagram_webhook(payload)
+        self.assertEqual(accepted, 0)
+        self.assertFalse(reelposter.jobs)
+        record.assert_called_with("999")
+
+    def test_direct_dm_video_uses_background_download_worker(self):
+        with (
+            patch.dict(
+                os.environ,
+                {"IG_DM_ALLOWED_SENDER_IDS": "111"},
+            ),
+            patch.object(reelposter, "record_dm_sender"),
+            patch.object(reelposter.executor, "submit") as submit,
+        ):
+            result = reelposter.create_dm_submission(
+                sender_id="111",
+                recipient_id="222",
+                message_id="direct-video-1",
+                attachment_type="video",
+                media_url="https://scontent.cdninstagram.com/video.mp4",
+                message_text="Use this caption",
+            )
+        self.assertEqual(result["status"], "queued")
+        self.assertEqual(
+            submit.call_args.args[0],
+            reelposter.prepare_direct_dm_media,
+        )
+        self.assertEqual(
+            reelposter.jobs[result["id"]]["caption"],
+            "Use this caption",
+        )
+
+    def test_direct_dm_worker_downloads_video_into_ready_review_job(self):
+        response = Mock()
+        response.url = "https://scontent.cdninstagram.com/video.mp4"
+        response.headers = {
+            "content-type": "video/mp4",
+            "content-length": "8",
+        }
+        response.iter_content.return_value = [b"video123"]
+        response.raise_for_status.return_value = None
+        with tempfile.TemporaryDirectory() as temporary:
+            jobs_dir = Path(temporary)
+            job_id = "direct-worker-job"
+            with reelposter.jobs_lock:
+                reelposter.jobs[job_id] = {
+                    "id": job_id,
+                    "status": "queued",
+                    "active_stage": "download",
+                    "source_url": response.url,
+                    "caption": "",
+                    "events": [],
+                    "intake_source": "instagram_dm",
+                    "review_required": True,
+                    "created_at": reelposter.utc_now(),
+                    "updated_at": reelposter.utc_now(),
+                }
+            with (
+                patch.object(reelposter, "JOBS_DIR", jobs_dir),
+                patch.object(reelposter.requests, "get", return_value=response),
+            ):
+                reelposter.prepare_direct_dm_media(
+                    job_id,
+                    response.url,
+                    "DM caption",
+                )
+            saved = reelposter.jobs[job_id]
+            self.assertEqual(saved["status"], "ready")
+            self.assertEqual(saved["caption"], "DM caption")
+            self.assertTrue(Path(saved["source_path"]).is_file())
+        response.close.assert_called_once()
 
     def test_instagram_login_token_uses_instagram_graph_host(self):
         self.assertEqual(

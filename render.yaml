@@ -35,6 +35,12 @@ services:
         sync: false
       - key: TELEGRAM_ALLOWED_USER_IDS
         sync: false
+      - key: META_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: IG_DM_ALLOWED_SENDER_IDS
+        sync: false
       - key: REELPOSTER_WEB_USERNAME
         value: reelposter
       - key: REELPOSTER_WEB_PASSWORD
