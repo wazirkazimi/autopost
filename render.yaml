@@ -2,15 +2,11 @@ services:
   - type: web
     name: reelposter
     runtime: python
-    plan: starter
+    plan: free
     region: singapore
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn --workers 1 --threads 8 --timeout 0 --bind 0.0.0.0:$PORT render_app:application
     healthCheckPath: /api/health
-    disk:
-      name: reelposter-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 10
     envVars:
       - key: REELPOSTER_DATA_DIR
         value: /opt/render/project/src/data

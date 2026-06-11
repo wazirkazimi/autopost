@@ -104,9 +104,9 @@ preference and sends a post-publish reminder with the Reel link so you can apply
 the setting in Instagram without risking a failed media container.
 
 Saved account profiles, overlay metadata, and overlay files live under `data/`.
-On Render, that directory is backed by the persistent disk configured in
-`render.yaml`. API responses never return saved access tokens or Cloudinary
-secrets.
+The free Render Blueprint uses ephemeral storage, so this directory can be
+cleared whenever the service sleeps, restarts, or redeploys. API responses never
+return saved access tokens or Cloudinary secrets.
 
 ## Publishing flow
 
@@ -131,10 +131,12 @@ published twice.
 
 ## Deploy to Render
 
-Render is enough for a personal, low-volume ReelPoster deployment, but use the
-paid Starter web service defined in `render.yaml`. The free web service is not
-appropriate because it can restart or spin down and does not support the
-persistent disk needed for logos, job state, and downloaded media.
+The included `render.yaml` uses a free Render web service. This is suitable for
+testing and immediate/manual posts, but Render can spin it down after 15 minutes
+without inbound traffic. Free services also have ephemeral storage, so logos,
+saved profiles, downloaded media, and job history can disappear after a sleep,
+restart, or deployment. Delayed posts, exact schedules, and Telegram long
+polling are therefore not reliable on the free plan.
 
 1. Push this repository to a private GitHub repository.
 2. In Render, choose **New > Blueprint** and select the repository.
@@ -147,8 +149,8 @@ persistent disk needed for logos, job state, and downloaded media.
 
 The deployment deliberately uses one Gunicorn worker. Telegram long polling
 runs inside that process; additional workers would start duplicate bot
-instances. The 10 GB persistent disk is mounted at
-`/opt/render/project/src/data`.
+instances. For reliable scheduling and persistent uploads, change the service
+to a paid instance and attach a disk at `/opt/render/project/src/data`.
 
 If Instagram blocks yt-dlp from Render's IP address, add a Render Secret File
 containing Netscape cookies and set `YTDLP_COOKIES_FILE` to that file's path.
