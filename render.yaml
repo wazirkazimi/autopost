@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: reelposter
+    runtime: python
+    plan: starter
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --workers 1 --threads 8 --timeout 0 --bind 0.0.0.0:$PORT render_app:application
+    healthCheckPath: /api/health
+    maxShutdownDelaySeconds: 300
+    disk:
+      name: reelposter-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 10
+    envVars:
+      - key: REELPOSTER_DATA_DIR
+        value: /opt/render/project/src/data
+      - key: TELEGRAM_BOT_ENABLED
+        value: "true"
+      - key: APP_TIMEZONE
+        value: Asia/Kolkata
+      - key: IG_GRAPH_API_VERSION
+        value: v25.0
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: IG_USER_ID
+        sync: false
+      - key: IG_ACCESS_TOKEN
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_ALLOWED_USER_IDS
+        sync: false
+      - key: REELPOSTER_WEB_USERNAME
+        value: reelposter
+      - key: REELPOSTER_WEB_PASSWORD
+        sync: false

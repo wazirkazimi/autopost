@@ -1,0 +1,9 @@
+flask>=3.1,<4
+yt-dlp>=2025.5.22
+cloudinary>=1.44,<2
+python-dotenv>=1.1,<2
+requests>=2.32,<3
+imageio-ffmpeg>=0.6,<1
+python-telegram-bot>=22.5,<23
+gunicorn>=23,<24
+tzdata>=2025.2
