@@ -171,6 +171,7 @@ class ReelPosterTests(unittest.TestCase):
             payload["thumbnail_url"],
             "/api/jobs/thumbnail-job/thumbnail",
         )
+        self.assertFalse(payload["hide_counts_requested"])
 
     def test_prepare_rejects_non_instagram_url(self):
         response = self.client.post(
@@ -375,6 +376,80 @@ class ReelPosterTests(unittest.TestCase):
         self.assertEqual(submit.call_args.args[-2:], ("account-2", "overlay-2"))
         self.assertEqual(reelposter.jobs[job_id]["account_name"], "Second account")
         self.assertEqual(reelposter.jobs[job_id]["overlay_name"], "Blue mark")
+
+    def test_hide_counts_preference_is_off_by_default_and_can_be_requested(self):
+        job_id = "hide-counts-job"
+        with reelposter.jobs_lock:
+            reelposter.jobs[job_id] = {
+                "id": job_id,
+                "status": "ready",
+                "active_stage": None,
+                "source_path": str(Path(tempfile.gettempdir()) / "source.mp4"),
+                "source_url": "https://www.instagram.com/reel/ABC123/",
+                "caption": "",
+                "events": [],
+                "created_at": reelposter.utc_now(),
+                "updated_at": reelposter.utc_now(),
+            }
+        account = {
+            "ACCOUNT_ID": "environment",
+            "ACCOUNT_NAME": "Environment account",
+        }
+        overlay = {"id": "default", "name": "Default overlay"}
+        with (
+            patch.object(reelposter, "resolve_account_settings", return_value=account),
+            patch.object(
+                reelposter,
+                "resolve_overlay_path",
+                return_value=(Path("mark.png"), overlay),
+            ),
+            patch.object(reelposter.executor, "submit"),
+        ):
+            response = self.client.post(
+                f"/api/reels/{job_id}/post",
+                json={
+                    "placement_mode": "center-v2",
+                    "x_center_percent": 80,
+                    "y_center_percent": 36,
+                    "destination": "grid",
+                    "hide_counts": True,
+                },
+            )
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(reelposter.jobs[job_id]["hide_counts_requested"])
+        self.assertFalse(
+            reelposter.jobs[job_id]["manual_count_hiding_required"]
+        )
+
+    def test_reel_container_uses_only_documented_visibility_parameters(self):
+        job = {
+            "cloudinary_url": "https://example.com/video.mp4",
+            "caption": "Caption",
+            "share_to_feed": True,
+            "hide_counts_requested": True,
+        }
+        settings = {
+            "IG_USER_ID": "123",
+            "IG_ACCESS_TOKEN": "IGAA-test",
+        }
+        with (
+            patch.object(
+                reelposter,
+                "graph_post",
+                return_value={"id": "container-id"},
+            ) as graph_post,
+            patch.object(reelposter, "wait_for_container"),
+        ):
+            result = reelposter.create_and_process_container(
+                "container-job",
+                job,
+                settings,
+            )
+        payload = graph_post.call_args.args[1]
+        self.assertEqual(result, "container-id")
+        self.assertEqual(payload["share_to_feed"], "true")
+        self.assertNotIn("hide_like_and_view_counts", payload)
+        self.assertNotIn("hide_share_count", payload)
 
     def test_post_rejects_outdated_placement_contract(self):
         job_id = "outdated-placement-job"

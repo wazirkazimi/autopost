@@ -127,6 +127,7 @@ def draft_keyboard(job: dict) -> InlineKeyboardMarkup:
     destination = job.get("telegram_destination", "grid")
     delay = int(job.get("telegram_delay", 0))
     scheduled = bool(job.get("telegram_scheduled_at"))
+    hide_counts = bool(job.get("telegram_hide_counts", False))
     accounts = account_options()
     overlays = overlay_options()
     return InlineKeyboardMarkup(
@@ -203,6 +204,14 @@ def draft_keyboard(job: dict) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    selected("Hide counts after post", hide_counts)
+                    if hide_counts
+                    else "Hide counts: Off",
+                    callback_data="rp:counts:toggle",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     selected("Now", delay == 0 and not scheduled),
                     callback_data="rp:delay:0",
                 ),
@@ -252,12 +261,18 @@ def draft_summary(job: dict) -> str:
         job.get("telegram_overlay_id"),
         "Not configured",
     )
+    count_setting = (
+        "Requested (manual Instagram step)"
+        if job.get("telegram_hide_counts")
+        else "Off"
+    )
     return (
         "Reel ready.\n"
         f"Account: {account_name}\n"
         f"Overlay: {overlay_name}\n"
         f"Placement: {position}, {int(job.get('telegram_size', 16))}%\n"
         f"Destination: {destination}\n"
+        f"Hide counts: {count_setting}\n"
         f"{timing}\n\n"
         "Use /caption followed by new text to replace the caption.\n"
         "Use /schedule YYYY-MM-DD HH:MM for an exact local time."
@@ -356,6 +371,7 @@ async def reel_url_message(
                 "telegram_controls_sent": False,
                 "telegram_account_id": accounts[0]["id"] if accounts else None,
                 "telegram_overlay_id": overlays[0]["id"] if overlays else None,
+                "telegram_hide_counts": False,
             },
         )
     except reelposter.ReelPosterError as exc:
@@ -473,6 +489,12 @@ def status_text(job: dict) -> str:
         text += f"\n{job['permalink']}"
     if job.get("error"):
         text += f"\n{job['error']}"
+    if job.get("manual_count_hiding_required"):
+        text += (
+            "\nAction needed: open this Reel in Instagram and use its settings "
+            "to hide like/view counts. Share-count visibility is not exposed "
+            "by Meta's publishing API."
+        )
     return text
 
 
@@ -513,6 +535,13 @@ async def control_callback(
         reelposter.update_job(job["id"], telegram_size=int(value))
     elif action == "dest" and value in {"grid", "reels-only"}:
         reelposter.update_job(job["id"], telegram_destination=value)
+    elif action == "counts" and value == "toggle":
+        reelposter.update_job(
+            job["id"],
+            telegram_hide_counts=not bool(
+                job.get("telegram_hide_counts", False)
+            ),
+        )
     elif action == "delay" and value in {"0", "15", "30", "60"}:
         reelposter.update_job(
             job["id"],
@@ -549,6 +578,7 @@ async def publish_callback(query, job: dict) -> None:
             placement_mode="center-v2",
             account_id=job.get("telegram_account_id"),
             overlay_id=job.get("telegram_overlay_id"),
+            hide_counts_requested=job.get("telegram_hide_counts", False),
         )
     except reelposter.ReelPosterError as exc:
         await query.edit_message_text(f"Could not queue the Reel:\n{exc}")

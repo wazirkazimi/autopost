@@ -66,6 +66,12 @@ Upload multiple PNG or GIF overlays from Setup. Choose the publishing account
 and overlay for each Reel from the web dropdowns. In Telegram, tap the Account
 or Overlay button to cycle through the saved choices before publishing.
 
+The **Hide like and view counts after publishing** preference is off by default.
+Meta's documented Reel publishing API does not provide a parameter for hiding
+like/view counts or share counts. When enabled, ReelPoster preserves the
+preference and sends a post-publish reminder with the Reel link so you can apply
+the setting in Instagram without risking a failed media container.
+
 Saved account profiles, overlay metadata, and overlay files live under `data/`.
 On Render, that directory is backed by the persistent disk configured in
 `render.yaml`. API responses never return saved access tokens or Cloudinary

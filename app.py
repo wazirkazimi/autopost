@@ -33,7 +33,7 @@ ACCOUNTS_STATE_PATH = DATA_DIR / "accounts.json"
 OVERLAYS_STATE_PATH = DATA_DIR / "overlays.json"
 OVERLAYS_DIR = DATA_DIR / "overlays"
 ENV_PATH = BASE_DIR / ".env"
-APP_VERSION = "2026.06.11-profiles-v1"
+APP_VERSION = "2026.06.11-counts-v1"
 ALLOWED_LOGO_EXTENSIONS = {".png", ".gif"}
 ALLOWED_DELAYS = {0, 15, 30, 60}
 SETTINGS_KEYS = (
@@ -232,6 +232,11 @@ def public_job(job: dict) -> dict:
         "created_at": job.get("created_at"),
         "updated_at": job.get("updated_at"),
         "share_to_feed": job.get("share_to_feed", True),
+        "hide_counts_requested": job.get("hide_counts_requested", False),
+        "manual_count_hiding_required": job.get(
+            "manual_count_hiding_required",
+            False,
+        ),
         "account_id": job.get("account_id"),
         "account_name": job.get("account_name"),
         "overlay_id": job.get("overlay_id"),
@@ -1019,10 +1024,20 @@ def publish_uploaded_reel(job_id: str) -> None:
             media_id=media_id,
             permalink=permalink,
             publish_at=None,
+            manual_count_hiding_required=bool(
+                job.get("hide_counts_requested")
+            ),
         )
         with jobs_lock:
             publish_timers.pop(job_id, None)
         add_event(job_id, "Done. Your Reel is live on Instagram.")
+        if job.get("hide_counts_requested"):
+            add_event(
+                job_id,
+                "Action needed: open the Reel in Instagram and hide like/view "
+                "counts from its settings. Meta's publishing API does not "
+                "provide a hide-counts or hide-shares parameter.",
+            )
     except Exception as exc:
         fail_job(job_id, normalize_error(exc))
 
@@ -1071,6 +1086,7 @@ def queue_post_job(
     placement_mode: str = "center-v2",
     account_id: str | None = None,
     overlay_id: str | None = None,
+    hide_counts_requested: bool = False,
 ) -> dict:
     with jobs_lock:
         job = jobs.get(job_id)
@@ -1113,6 +1129,10 @@ def queue_post_job(
     if destination not in {"grid", "reels-only"}:
         raise ReelPosterError("Choose a valid Instagram destination.")
     share_to_feed = destination == "grid"
+    hide_counts_requested = (
+        hide_counts_requested is True
+        or str(hide_counts_requested).strip().lower() in {"1", "true", "yes", "on"}
+    )
     account = resolve_account_settings(account_id)
     _, overlay = resolve_overlay_path(overlay_id)
 
@@ -1129,6 +1149,8 @@ def queue_post_job(
         account_name=account["ACCOUNT_NAME"],
         overlay_id=overlay["id"],
         overlay_name=overlay.get("name") or "Overlay",
+        hide_counts_requested=hide_counts_requested,
+        manual_count_hiding_required=False,
         status="watermarking",
         active_stage="watermark",
         error=None,
@@ -1452,6 +1474,7 @@ def start_post(job_id: str):
             placement_mode=payload.get("placement_mode"),
             account_id=payload.get("account_id"),
             overlay_id=payload.get("overlay_id"),
+            hide_counts_requested=payload.get("hide_counts", False),
         )
     except JobNotFoundError as exc:
         return jsonify({"error": str(exc)}), 404
