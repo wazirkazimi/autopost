@@ -309,6 +309,32 @@ class ReelPosterTests(unittest.TestCase):
         self.assertEqual(settings["IG_USER_ID"], "correct-id")
         set_key_mock.assert_called_once()
 
+    def test_resolve_account_derives_instagram_login_user_id(self):
+        profile = {
+            "id": "environment",
+            "name": "Environment account",
+            "CLOUDINARY_CLOUD_NAME": "cloud",
+            "CLOUDINARY_API_KEY": "key",
+            "CLOUDINARY_API_SECRET": "secret",
+            "IG_USER_ID": "",
+            "IG_ACCESS_TOKEN": "IGAA-test",
+        }
+        with (
+            patch.object(
+                reelposter,
+                "account_profiles",
+                return_value=[profile],
+            ),
+            patch.object(
+                reelposter,
+                "graph_get",
+                return_value={"user_id": "derived-id", "username": "main"},
+            ),
+            patch.dict(os.environ, {}, clear=False),
+        ):
+            settings = reelposter.resolve_account_settings("environment")
+        self.assertEqual(settings["IG_USER_ID"], "derived-id")
+
     def test_public_video_preflight_accepts_partial_mp4(self):
         response = Mock()
         response.status_code = 206

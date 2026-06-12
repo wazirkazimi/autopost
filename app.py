@@ -658,7 +658,18 @@ def environment_account() -> dict | None:
     load_dotenv(ENV_PATH, override=True)
     values = {key: os.getenv(key, "").strip() for key in SETTINGS_KEYS}
     values["IG_ACCESS_TOKEN"] = normalize_access_token(values["IG_ACCESS_TOKEN"])
-    if not all(values.values()):
+    required = (
+        "CLOUDINARY_CLOUD_NAME",
+        "CLOUDINARY_API_KEY",
+        "CLOUDINARY_API_SECRET",
+        "IG_ACCESS_TOKEN",
+    )
+    if not all(values[key] for key in required):
+        return None
+    if (
+        not values["IG_USER_ID"]
+        and not values["IG_ACCESS_TOKEN"].startswith(("IGAA", "IGQ"))
+    ):
         return None
     return {
         "id": "environment",
@@ -699,7 +710,13 @@ def resolve_account_settings(account_id: str | None = None) -> dict[str, str]:
         raise ReelPosterError("The selected Instagram account no longer exists.")
     values = {key: str(profile.get(key, "")).strip() for key in SETTINGS_KEYS}
     values["IG_ACCESS_TOKEN"] = normalize_access_token(values["IG_ACCESS_TOKEN"])
-    missing = [key for key, value in values.items() if not value]
+    required = (
+        "CLOUDINARY_CLOUD_NAME",
+        "CLOUDINARY_API_KEY",
+        "CLOUDINARY_API_SECRET",
+        "IG_ACCESS_TOKEN",
+    )
+    missing = [key for key in required if not values[key]]
     if missing:
         raise ReelPosterError(
             "The selected account is incomplete. Missing: " + ", ".join(missing)
@@ -707,6 +724,31 @@ def resolve_account_settings(account_id: str | None = None) -> dict[str, str]:
     if not values["IG_ACCESS_TOKEN"].startswith(("IGAA", "IGQ", "EAA")):
         raise ReelPosterError(
             "The selected account has an invalid Instagram access token."
+        )
+    if not values["IG_USER_ID"] and values["IG_ACCESS_TOKEN"].startswith(
+        ("IGAA", "IGQ")
+    ):
+        result = graph_get(
+            "me",
+            {
+                "fields": "user_id,username",
+                "access_token": values["IG_ACCESS_TOKEN"],
+            },
+        )
+        values["IG_USER_ID"] = str(
+            result.get("user_id") or result.get("id") or ""
+        )
+        if values["IG_USER_ID"]:
+            if profile["id"] == "environment":
+                os.environ["IG_USER_ID"] = values["IG_USER_ID"]
+            else:
+                update_account_profile_user_id(
+                    profile["id"],
+                    values["IG_USER_ID"],
+                )
+    if not values["IG_USER_ID"]:
+        raise ReelPosterError(
+            "The selected account is missing its Instagram Business Account ID."
         )
     return {
         **values,
