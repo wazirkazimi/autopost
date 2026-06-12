@@ -324,6 +324,33 @@ class ReelPosterTests(unittest.TestCase):
         filter_graph = command[command.index("-filter_complex") + 1]
         self.assertIn("scale=158:-1", filter_graph)
         self.assertNotIn("scale2ref", filter_graph)
+        self.assertEqual(command[command.index("-threads") + 1], "1")
+        self.assertEqual(command[command.index("-preset") + 1], "veryfast")
+
+    def test_cloudinary_upload_uses_small_chunks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            video_path = Path(directory) / "output.mp4"
+            video_path.write_bytes(b"video")
+            settings = {
+                "CLOUDINARY_CLOUD_NAME": "cloud",
+                "CLOUDINARY_API_KEY": "key",
+                "CLOUDINARY_API_SECRET": "secret",
+            }
+            with (
+                patch.object(reelposter.cloudinary, "config"),
+                patch.object(
+                    reelposter.cloudinary.uploader,
+                    "upload_large",
+                    return_value={"secure_url": "https://example.com/video.mp4"},
+                ) as upload,
+            ):
+                result = reelposter.upload_to_cloudinary(
+                    video_path,
+                    settings,
+                    "job-id",
+                )
+        self.assertEqual(result, "https://example.com/video.mp4")
+        self.assertEqual(upload.call_args.kwargs["chunk_size"], 6 * 1024 * 1024)
 
     def test_jobs_endpoint_returns_newest_first(self):
         with reelposter.jobs_lock:

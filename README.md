@@ -136,7 +136,10 @@ testing and immediate/manual posts, but Render can spin it down after 15 minutes
 without inbound traffic. Free services also have ephemeral storage, so logos,
 saved profiles, downloaded media, and job history can disappear after a sleep,
 restart, or deployment. Delayed posts, exact schedules, and Telegram long
-polling are therefore not reliable on the free plan.
+polling are therefore not reliable on the free plan. The free configuration
+processes one video at a time, limits FFmpeg to one thread, streams Cloudinary
+uploads in small chunks, and disables Telegram polling to stay within the
+512 MB memory limit.
 
 1. Push this repository to a private GitHub repository.
 2. In Render, choose **New > Blueprint** and select the repository.

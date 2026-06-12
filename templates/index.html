@@ -983,7 +983,11 @@
       </div>
       <nav class="nav-actions">
         <button class="ghost-button" id="createNav" type="button">Create</button>
-        <button class="ghost-button" id="jobsNav" type="button">
+        <button class="ghost-button" id="jobsNav" type="button" aria-label="Open jobs">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="4" y="7" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.7"/>
+            <path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7M4 12h16" stroke="currentColor" stroke-width="1.7"/>
+          </svg>
           <span>Jobs</span>
           <span class="nav-badge hidden" id="jobsBadge">0</span>
         </button>
@@ -1177,7 +1181,7 @@
         <button class="ghost-button" id="refreshJobsButton" type="button">Refresh jobs</button>
       </div>
       <div class="jobs-list" id="jobsList">
-        <div class="jobs-empty">No posting jobs yet.</div>
+        <div class="jobs-empty">No jobs yet. A Review &amp; edit action appears after an allowed Instagram DM finishes downloading.</div>
       </div>
     </section>
 
@@ -1470,7 +1474,7 @@
       renderJobsOverview(visibleJobs);
 
       if (!visibleJobs.length) {
-        $("#jobsList").innerHTML = `<div class="jobs-empty">No background jobs yet. Publish a Reel and it will move here automatically.</div>`;
+        $("#jobsList").innerHTML = `<div class="jobs-empty">No jobs yet. A Review &amp; edit action appears after an allowed Instagram DM finishes downloading.</div>`;
         return;
       }
 

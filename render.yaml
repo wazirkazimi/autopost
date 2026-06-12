@@ -5,13 +5,21 @@ services:
     plan: free
     region: singapore
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --workers 1 --threads 8 --timeout 0 --bind 0.0.0.0:$PORT render_app:application
+    startCommand: gunicorn --workers 1 --threads 2 --timeout 0 --bind 0.0.0.0:$PORT render_app:application
     healthCheckPath: /api/health
     envVars:
       - key: REELPOSTER_DATA_DIR
         value: /opt/render/project/src/data
       - key: TELEGRAM_BOT_ENABLED
-        value: "true"
+        value: "false"
+      - key: REELPOSTER_BACKGROUND_WORKERS
+        value: "1"
+      - key: FFMPEG_THREADS
+        value: "1"
+      - key: FFMPEG_PRESET
+        value: veryfast
+      - key: MALLOC_ARENA_MAX
+        value: "2"
       - key: APP_TIMEZONE
         value: Asia/Kolkata
       - key: IG_GRAPH_API_VERSION

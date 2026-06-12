@@ -37,7 +37,7 @@ DM_SENDERS_STATE_PATH = DATA_DIR / "dm_senders.json"
 DM_CONFIG_STATE_PATH = DATA_DIR / "dm_config.json"
 OVERLAYS_DIR = DATA_DIR / "overlays"
 ENV_PATH = BASE_DIR / ".env"
-APP_VERSION = "2026.06.11-dm-intake-v1"
+APP_VERSION = "2026.06.12-render-free-memory-v1"
 ALLOWED_LOGO_EXTENSIONS = {".png", ".gif"}
 ALLOWED_DELAYS = {0, 15, 30, 60}
 MAX_DM_MEDIA_BYTES = 500 * 1024 * 1024
@@ -81,10 +81,28 @@ load_dotenv(ENV_PATH, override=True)
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
+
+def bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
 jobs: dict[str, dict] = {}
 jobs_lock = threading.RLock()
 profiles_lock = threading.RLock()
-executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="reelposter")
+ffmpeg_lock = threading.RLock()
+executor = ThreadPoolExecutor(
+    max_workers=bounded_env_int(
+        "REELPOSTER_BACKGROUND_WORKERS",
+        4,
+        1,
+        4,
+    ),
+    thread_name_prefix="reelposter",
+)
 publish_timers: dict[str, threading.Timer] = {}
 
 
@@ -479,6 +497,7 @@ def prepare_reel(job_id: str, reel_url: str) -> None:
             "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
             "outtmpl": str(job_dir / "source.%(ext)s"),
             "merge_output_format": "mp4",
+            "concurrent_fragment_downloads": 1,
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
@@ -490,8 +509,9 @@ def prepare_reel(job_id: str, reel_url: str) -> None:
         if cookies_file:
             ydl_options["cookiefile"] = cookies_file
 
-        with yt_dlp.YoutubeDL(ydl_options) as ydl:
-            info = ydl.extract_info(reel_url, download=True)
+        with ffmpeg_lock:
+            with yt_dlp.YoutubeDL(ydl_options) as ydl:
+                info = ydl.extract_info(reel_url, download=True)
 
         source_path = locate_downloaded_video(job_dir)
         caption = (info.get("description") or info.get("title") or "").strip()
@@ -807,12 +827,13 @@ def probe_video_dimensions(path: Path) -> tuple[int, int]:
     ffmpeg = ffmpeg_executable()
     if not ffmpeg:
         raise ReelPosterError("FFmpeg is unavailable.")
-    result = subprocess.run(
-        [ffmpeg, "-hide_banner", "-i", str(path)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    with ffmpeg_lock:
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-i", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     matches = re.findall(
         r"Video:.*?,\s*(\d{2,5})x(\d{2,5})(?:[\s,\[])",
         result.stderr,
@@ -838,58 +859,87 @@ def watermark_video(
             "pip install -r requirements.txt."
         )
 
-    video_width, _video_height = probe_video_dimensions(source_path)
-    logo_width = max(16, round(video_width * size_percent / 100))
-    x_ratio = x_center_percent / 100
-    y_ratio = y_center_percent / 100
-    x = (
-        "max(0\\,min(main_w-overlay_w\\,"
-        f"main_w*{x_ratio:.6f}-overlay_w/2))"
-    )
-    y = (
-        "max(0\\,min(main_h-overlay_h\\,"
-        f"main_h*{y_ratio:.6f}-overlay_h/2))"
-    )
+    ffmpeg_threads = bounded_env_int("FFMPEG_THREADS", 1, 1, 4)
+    preset = os.getenv("FFMPEG_PRESET", "veryfast").strip().lower()
+    if preset not in {
+        "ultrafast",
+        "superfast",
+        "veryfast",
+        "faster",
+        "fast",
+        "medium",
+    }:
+        preset = "veryfast"
 
-    command = [ffmpeg, "-y", "-i", str(source_path)]
-    if logo_path.suffix.lower() == ".gif":
-        command.extend(["-stream_loop", "-1", "-i", str(logo_path)])
-    else:
-        command.extend(["-loop", "1", "-i", str(logo_path)])
+    with ffmpeg_lock:
+        video_width, _video_height = probe_video_dimensions(source_path)
+        logo_width = max(16, round(video_width * size_percent / 100))
+        x_ratio = x_center_percent / 100
+        y_ratio = y_center_percent / 100
+        x = (
+            "max(0\\,min(main_w-overlay_w\\,"
+            f"main_w*{x_ratio:.6f}-overlay_w/2))"
+        )
+        y = (
+            "max(0\\,min(main_h-overlay_h\\,"
+            f"main_h*{y_ratio:.6f}-overlay_h/2))"
+        )
 
-    filter_graph = (
-        f"[1:v]scale={logo_width}:-1:flags=lanczos,"
-        "format=rgba[logo];"
-        f"[0:v][logo]overlay={x}:{y}:format=auto:shortest=1[v]"
-    )
-    command.extend(
-        [
-            "-filter_complex",
-            filter_graph,
-            "-map",
-            "[v]",
-            "-map",
-            "0:a?",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "medium",
-            "-crf",
-            "20",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-movflags",
-            "+faststart",
-            "-shortest",
-            str(output_path),
+        command = [
+            ffmpeg,
+            "-y",
+            "-filter_threads",
+            str(ffmpeg_threads),
+            "-filter_complex_threads",
+            str(ffmpeg_threads),
+            "-i",
+            str(source_path),
         ]
-    )
+        if logo_path.suffix.lower() == ".gif":
+            command.extend(["-stream_loop", "-1", "-i", str(logo_path)])
+        else:
+            command.extend(["-loop", "1", "-i", str(logo_path)])
 
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+        filter_graph = (
+            f"[1:v]scale={logo_width}:-1:flags=lanczos,"
+            "format=rgba[logo];"
+            f"[0:v][logo]overlay={x}:{y}:format=auto:shortest=1[v]"
+        )
+        command.extend(
+            [
+                "-filter_complex",
+                filter_graph,
+                "-map",
+                "[v]",
+                "-map",
+                "0:a?",
+                "-c:v",
+                "libx264",
+                "-preset",
+                preset,
+                "-threads",
+                str(ffmpeg_threads),
+                "-crf",
+                "20",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-movflags",
+                "+faststart",
+                "-shortest",
+                str(output_path),
+            ]
+        )
+
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     if result.returncode != 0:
         detail = result.stderr.strip().splitlines()
         tail = "\n".join(detail[-8:])
@@ -903,17 +953,13 @@ def upload_to_cloudinary(video_path: Path, settings: dict[str, str], job_id: str
         api_secret=settings["CLOUDINARY_API_SECRET"],
         secure=True,
     )
-    upload_method = (
-        cloudinary.uploader.upload_large
-        if video_path.stat().st_size > 95 * 1024 * 1024
-        else cloudinary.uploader.upload
-    )
-    response = upload_method(
+    response = cloudinary.uploader.upload_large(
         str(video_path),
         resource_type="video",
         folder="reelposter",
         public_id=job_id,
         overwrite=True,
+        chunk_size=6 * 1024 * 1024,
     )
     secure_url = response.get("secure_url")
     if not secure_url:
@@ -1680,6 +1726,24 @@ def health():
             "job_queue": True,
             "job_overview": True,
             "ffmpeg": bool(ffmpeg),
+            "runtime_limits": {
+                "background_workers": bounded_env_int(
+                    "REELPOSTER_BACKGROUND_WORKERS",
+                    4,
+                    1,
+                    4,
+                ),
+                "ffmpeg_threads": bounded_env_int(
+                    "FFMPEG_THREADS",
+                    1,
+                    1,
+                    4,
+                ),
+                "ffmpeg_preset": os.getenv(
+                    "FFMPEG_PRESET",
+                    "veryfast",
+                ).strip().lower(),
+            },
             "configured": bool(account_profiles()),
             "logo": bool(overlay_profiles()),
             "account_profiles": len(account_profiles()),
@@ -2014,30 +2078,42 @@ def job_thumbnail(job_id: str):
         ffmpeg = ffmpeg_executable()
         if not ffmpeg:
             return jsonify({"error": "FFmpeg is unavailable."}), 503
-        result = subprocess.run(
-            [
-                ffmpeg,
-                "-y",
-                "-ss",
-                "0.5",
-                "-i",
-                str(source_path),
-                "-frames:v",
-                "1",
-                "-vf",
-                (
-                    "scale=360:640:force_original_aspect_ratio=decrease:"
-                    "flags=lanczos,"
-                    "pad=360:640:(ow-iw)/2:(oh-ih)/2:black"
-                ),
-                "-q:v",
-                "3",
-                str(thumbnail_path),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        with ffmpeg_lock:
+            if thumbnail_path.exists():
+                return send_file(
+                    thumbnail_path,
+                    conditional=True,
+                    max_age=3600,
+                )
+            ffmpeg_threads = bounded_env_int("FFMPEG_THREADS", 1, 1, 4)
+            result = subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-filter_threads",
+                    str(ffmpeg_threads),
+                    "-ss",
+                    "0.5",
+                    "-i",
+                    str(source_path),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    (
+                        "scale=360:640:force_original_aspect_ratio=decrease:"
+                        "flags=lanczos,"
+                        "pad=360:640:(ow-iw)/2:(oh-ih)/2:black"
+                    ),
+                    "-threads",
+                    str(ffmpeg_threads),
+                    "-q:v",
+                    "3",
+                    str(thumbnail_path),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
         if result.returncode != 0 or not thumbnail_path.exists():
             return jsonify({"error": "Could not create the Reel preview."}), 500
     return send_file(thumbnail_path, conditional=True, max_age=3600)
