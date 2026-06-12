@@ -581,6 +581,76 @@
       box-shadow: 0 0 0 3px rgba(124, 58, 237, .08);
     }
 
+    .toggle-setting {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 15px;
+      border: 1px solid #303030;
+      border-radius: 13px;
+      background: #0d0d0d;
+      cursor: pointer;
+    }
+
+    .toggle-copy strong {
+      display: block;
+      margin-bottom: 5px;
+      color: #e6e6e6;
+      font-size: 13px;
+    }
+
+    .toggle-copy span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .toggle-control {
+      position: relative;
+      flex: 0 0 auto;
+      width: 48px;
+      height: 27px;
+    }
+
+    .toggle-control input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .toggle-track {
+      position: absolute;
+      inset: 0;
+      border: 1px solid #3a3a3a;
+      border-radius: 999px;
+      background: #202020;
+      transition: .18s ease;
+    }
+
+    .toggle-track::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 19px;
+      height: 19px;
+      border-radius: 50%;
+      background: #a3a3a3;
+      transition: .18s ease;
+    }
+
+    .toggle-control input:checked + .toggle-track {
+      border-color: var(--accent);
+      background: var(--accent);
+    }
+
+    .toggle-control input:checked + .toggle-track::after {
+      transform: translateX(21px);
+      background: white;
+    }
+
     .action-row {
       display: flex;
       align-items: center;
@@ -836,6 +906,193 @@
       text-align: center;
     }
 
+    .analytics-view {
+      width: min(1040px, 100%);
+      margin: 0 auto;
+    }
+
+    .analytics-toolbar {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 22px;
+    }
+
+    .analytics-toolbar .hero { margin-bottom: 0; }
+
+    .analytics-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .analytics-controls select {
+      min-width: 190px;
+      min-height: 42px;
+    }
+
+    .analytics-panel {
+      padding: 22px;
+      margin-bottom: 18px;
+    }
+
+    .analytics-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .analytics-heading h2 {
+      margin: 0 0 5px;
+      font-size: 15px;
+    }
+
+    .analytics-heading p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .metric-card {
+      padding: 17px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #0d0d0d;
+    }
+
+    .metric-card span {
+      display: block;
+      margin-bottom: 9px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .metric-card strong {
+      display: block;
+      font-size: 24px;
+      letter-spacing: -.04em;
+    }
+
+    .best-time-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .best-time-card {
+      padding: 17px;
+      border: 1px solid rgba(124, 58, 237, .32);
+      border-radius: 14px;
+      background: rgba(124, 58, 237, .08);
+    }
+
+    .best-time-card strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .best-time-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .analytics-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .analytics-reel {
+      display: grid;
+      grid-template-columns: 68px minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #0d0d0d;
+    }
+
+    .analytics-thumb {
+      width: 68px;
+      aspect-ratio: 9 / 16;
+      overflow: hidden;
+      border-radius: 9px;
+      background: #1b1b1b;
+    }
+
+    .analytics-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    .analytics-reel h3 {
+      margin: 0 0 6px;
+      overflow: hidden;
+      color: #ededed;
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .analytics-reel p {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .performance-track {
+      height: 5px;
+      overflow: hidden;
+      border-radius: 99px;
+      background: #252525;
+    }
+
+    .performance-track span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), var(--accent-light));
+    }
+
+    .analytics-reel-metrics {
+      display: grid;
+      grid-template-columns: repeat(2, auto);
+      gap: 6px 15px;
+      color: var(--muted);
+      font-size: 10px;
+      text-align: right;
+    }
+
+    .analytics-reel-metrics strong { color: #ededed; }
+
+    .analytics-warning {
+      margin-bottom: 14px;
+      padding: 12px 14px;
+      border: 1px solid rgba(251, 113, 133, .3);
+      border-radius: 12px;
+      background: rgba(251, 113, 133, .08);
+      color: #fecdd3;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
     .setup-card { padding: 28px; }
 
     .setup-grid {
@@ -966,6 +1223,17 @@
       .action-row .primary-button { width: 100%; }
       .nav-actions .ghost-button span { display: none; }
       .jobs-toolbar { align-items: stretch; flex-direction: column; }
+      .analytics-toolbar { align-items: stretch; flex-direction: column; }
+      .analytics-controls { align-items: stretch; flex-direction: column; }
+      .analytics-controls select { width: 100%; }
+      .metric-grid, .best-time-grid { grid-template-columns: 1fr 1fr; }
+      .analytics-reel { grid-template-columns: 54px minmax(0, 1fr); }
+      .analytics-thumb { width: 54px; }
+      .analytics-reel-metrics {
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(4, 1fr);
+        text-align: left;
+      }
     }
   </style>
 </head>
@@ -990,6 +1258,12 @@
           </svg>
           <span>Jobs</span>
           <span class="nav-badge hidden" id="jobsBadge">0</span>
+        </button>
+        <button class="ghost-button" id="analyticsNav" type="button" aria-label="Open analytics">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M5 19V10M12 19V5M19 19v-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+          <span>Analytics</span>
         </button>
         <button class="ghost-button" id="setupNav" type="button" aria-label="Open setup">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -1102,15 +1376,16 @@
 
             <div class="field">
               <label>Public engagement counts</label>
-              <div class="destination-options" style="grid-template-columns: 1fr;">
-                <label class="destination-option">
+              <label class="toggle-setting" for="hideCounts">
+                <span class="toggle-copy">
+                  <strong>Remind me to hide public counts</strong>
+                  <span id="hideCountsState">Off. Instagram's API cannot hide likes, views, or shares automatically.</span>
+                </span>
+                <span class="toggle-control">
                   <input id="hideCounts" type="checkbox">
-                  <span class="destination-card">
-                    <strong>Hide like and view counts after publishing</strong>
-                    <span>Off by default. Meta does not expose this or share-count hiding in its publishing API, so ReelPoster will remind you to apply it in Instagram after the Reel goes live.</span>
-                  </span>
-                </label>
-              </div>
+                  <span class="toggle-track"></span>
+                </span>
+              </label>
             </div>
 
             <div class="field">
@@ -1182,6 +1457,54 @@
       </div>
       <div class="jobs-list" id="jobsList">
         <div class="jobs-empty">No jobs yet. A Review &amp; edit action appears after an allowed Instagram DM finishes downloading.</div>
+      </div>
+    </section>
+
+    <section id="analyticsView" class="analytics-view hidden">
+      <div class="analytics-toolbar">
+        <div class="hero">
+          <div class="eyebrow">Instagram Insights</div>
+          <h1>Know what works.</h1>
+          <p>Compare recent Reel performance and find the posting windows that performed best for your account.</p>
+        </div>
+        <div class="analytics-controls">
+          <select id="analyticsAccountSelect" aria-label="Analytics account"></select>
+          <button class="ghost-button" id="refreshAnalyticsButton" type="button">Refresh insights</button>
+        </div>
+      </div>
+
+      <div id="analyticsStatus" class="jobs-empty">Open Analytics to load Instagram Insights.</div>
+      <div id="analyticsContent" class="hidden">
+        <div id="analyticsWarnings"></div>
+        <section class="card analytics-panel">
+          <div class="analytics-heading">
+            <div>
+              <h2 id="analyticsAccountTitle">Account performance</h2>
+              <p id="analyticsGeneratedAt"></p>
+            </div>
+          </div>
+          <div class="metric-grid" id="analyticsMetrics"></div>
+        </section>
+
+        <section class="card analytics-panel">
+          <div class="analytics-heading">
+            <div>
+              <h2>Best observed posting times</h2>
+              <p id="analyticsMethodology">Based on your recent Reel engagement.</p>
+            </div>
+          </div>
+          <div class="best-time-grid" id="bestTimes"></div>
+        </section>
+
+        <section class="card analytics-panel">
+          <div class="analytics-heading">
+            <div>
+              <h2>Recent Reel performance</h2>
+              <p>Views, reach, interactions, and engagement rate from Instagram Insights.</p>
+            </div>
+          </div>
+          <div class="analytics-list" id="analyticsReels"></div>
+        </section>
       </div>
     </section>
 
@@ -1456,9 +1779,16 @@
         postButton.innerHTML = "Published ✓";
         if (job.permalink) {
           $("#resultLink").href = job.permalink;
+          $("#resultLink").textContent = job.manual_count_hiding_required
+            ? "Open Reel and hide counts manually"
+            : "Open published Reel";
           $("#resultLink").classList.remove("hidden");
         }
-        showToast("Your Reel is live.");
+        showToast(
+          job.manual_count_hiding_required
+            ? "Your Reel is live. Open it in Instagram to hide like and view counts."
+            : "Your Reel is live."
+        );
       }
     }
 
@@ -1510,7 +1840,7 @@
             <div class="job-footer">
               <span>${job.intake_source === "instagram_dm" ? `Instagram DM · sender ${escapeHtml(job.dm_sender_id || "unknown")}` : escapeHtml(scheduled || (job.share_to_feed ? "Reels + profile grid" : "Reels only"))}</span>
               ${reviewAction}
-              ${job.permalink ? `<a href="${escapeHtml(job.permalink)}" target="_blank" rel="noreferrer">Open Reel</a>` : ""}
+              ${job.permalink ? `<a href="${escapeHtml(job.permalink)}" target="_blank" rel="noreferrer">${job.manual_count_hiding_required ? "Hide counts in Instagram" : "Open Reel"}</a>` : ""}
             </div>
           </article>
         `;
@@ -1537,7 +1867,7 @@
         const action = job.status === "ready" && job.review_required
           ? `<button class="overview-link review-job-button" type="button" data-review-job="${escapeHtml(job.id)}">Review &amp; edit</button>`
           : job.permalink
-          ? `<a class="overview-link" href="${escapeHtml(job.permalink)}" target="_blank" rel="noreferrer">Open published Reel</a>`
+          ? `<a class="overview-link" href="${escapeHtml(job.permalink)}" target="_blank" rel="noreferrer">${job.manual_count_hiding_required ? "Hide counts in Instagram" : "Open published Reel"}</a>`
           : `<a class="overview-link" href="#" data-open-jobs="true">View job details</a>`;
         return `
           <article class="overview-card">
@@ -1589,6 +1919,119 @@
         renderJobs(result.jobs || []);
       } catch (error) {
         $("#jobsList").innerHTML = `<div class="jobs-empty">${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    const numberFormatter = new Intl.NumberFormat(undefined, {
+      notation: "compact",
+      maximumFractionDigits: 1
+    });
+
+    function formatMetric(value) {
+      return numberFormatter.format(Number(value || 0));
+    }
+
+    function renderAnalytics(data) {
+      $("#analyticsStatus").classList.add("hidden");
+      $("#analyticsContent").classList.remove("hidden");
+      const account = data.account || {};
+      const totals = data.totals || {};
+      $("#analyticsAccountTitle").textContent = account.username
+        ? `@${account.username} performance`
+        : `${account.name || "Instagram account"} performance`;
+      $("#analyticsGeneratedAt").textContent =
+        `${formatMetric(account.followers_count)} followers · ${data.analyzed_count || 0} Reels analyzed · ${data.timezone || "UTC"}`;
+
+      const metrics = [
+        ["Followers", account.followers_count],
+        ["Reels analyzed", data.analyzed_count],
+        ["Views", totals.views],
+        ["Reach", totals.reach],
+        ["Interactions", totals.total_interactions],
+        ["Engagement rate", `${Number(totals.engagement_rate || 0).toFixed(2)}%`]
+      ];
+      $("#analyticsMetrics").innerHTML = metrics.map(([label, value]) => `
+        <div class="metric-card">
+          <span>${escapeHtml(label)}</span>
+          <strong>${typeof value === "string" ? escapeHtml(value) : formatMetric(value)}</strong>
+        </div>
+      `).join("");
+
+      $("#analyticsWarnings").innerHTML = (data.warnings || []).map(warning =>
+        `<div class="analytics-warning">${escapeHtml(warning)}</div>`
+      ).join("");
+      $("#analyticsMethodology").textContent = data.methodology || "";
+
+      const bestTimes = data.best_times || [];
+      $("#bestTimes").innerHTML = bestTimes.length
+        ? bestTimes.map((slot, index) => `
+          <div class="best-time-card">
+            <strong>${index + 1}. ${escapeHtml(slot.label)}</strong>
+            <span>${slot.sample_count} post${slot.sample_count === 1 ? "" : "s"} · ${formatMetric(slot.average_views)} average views · ${formatMetric(slot.average_interactions)} average interactions</span>
+          </div>
+        `).join("")
+        : `<div class="jobs-empty" style="grid-column: 1 / -1;">Not enough non-zero Insights data yet. Publish more Reels and refresh later.</div>`;
+
+      const media = data.media || [];
+      const maxViews = Math.max(1, ...media.map(item => Number(item.views || 0)));
+      $("#analyticsReels").innerHTML = media.length
+        ? media.map(item => {
+          const width = Math.max(
+            2,
+            Math.round(Number(item.views || 0) / maxViews * 100)
+          );
+          const published = item.timestamp
+            ? new Date(item.timestamp).toLocaleString()
+            : "Unknown date";
+          const title = escapeHtml(item.title || "Reel");
+          return `
+            <article class="analytics-reel">
+              <div class="analytics-thumb">
+                ${item.thumbnail_url ? `<img src="${escapeHtml(item.thumbnail_url)}" alt="" loading="lazy">` : ""}
+              </div>
+              <div>
+                <h3>${item.permalink ? `<a href="${escapeHtml(item.permalink)}" target="_blank" rel="noreferrer" style="color: inherit; text-decoration: none;">${title}</a>` : title}</h3>
+                <p>${escapeHtml(published)}</p>
+                <div class="performance-track"><span style="width: ${width}%"></span></div>
+              </div>
+              <div class="analytics-reel-metrics">
+                <span><strong>${formatMetric(item.views)}</strong><br>views</span>
+                <span><strong>${formatMetric(item.reach)}</strong><br>reach</span>
+                <span><strong>${formatMetric(item.total_interactions)}</strong><br>interactions</span>
+                <span><strong>${Number(item.engagement_rate || 0).toFixed(2)}%</strong><br>engagement</span>
+              </div>
+            </article>
+          `;
+        }).join("")
+        : `<div class="jobs-empty">No recent Reels were returned for this account.</div>`;
+    }
+
+    async function loadAnalytics(force = false) {
+      const select = $("#analyticsAccountSelect");
+      if (!state.accounts.length || !select.value) {
+        $("#analyticsContent").classList.add("hidden");
+        $("#analyticsStatus").classList.remove("hidden");
+        $("#analyticsStatus").textContent =
+          "Add an Instagram account in Setup before loading analytics.";
+        return;
+      }
+      const button = $("#refreshAnalyticsButton");
+      setButtonLoading(button, true, "Loading");
+      $("#analyticsContent").classList.add("hidden");
+      $("#analyticsStatus").classList.remove("hidden");
+      $("#analyticsStatus").textContent = "Reading recent Instagram Insights...";
+      try {
+        const query = new URLSearchParams({ account_id: select.value });
+        if (force) query.set("refresh", "1");
+        const data = await api(`/api/analytics?${query.toString()}`);
+        renderAnalytics(data);
+      } catch (error) {
+        $("#analyticsContent").classList.add("hidden");
+        $("#analyticsStatus").classList.remove("hidden");
+        $("#analyticsStatus").textContent = error.message;
+        showToast(error.message, true);
+      } finally {
+        setButtonLoading(button, false);
       }
     }
 
@@ -1706,6 +2149,7 @@
       $("#scheduleAt").value = "";
       document.querySelector('input[name="destination"][value="grid"]').checked = true;
       $("#hideCounts").checked = false;
+      updateHideCountsToggle();
       state.logoX = 90;
       state.logoY = 90;
       state.position = "bottom-right";
@@ -1724,8 +2168,10 @@
     function showView(name) {
       $("#createView").classList.toggle("hidden", name !== "create");
       $("#jobsView").classList.toggle("hidden", name !== "jobs");
+      $("#analyticsView").classList.toggle("hidden", name !== "analytics");
       $("#setupView").classList.toggle("hidden", name !== "setup");
       if (name === "jobs") loadJobs();
+      if (name === "analytics") loadAnalytics();
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
@@ -1754,6 +2200,15 @@
         ? state.accounts.map(account => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)}</option>`).join("")
         : `<option value="">No publishing accounts</option>`;
       if (state.accounts.some(account => account.id === previousAccount)) accountSelect.value = previousAccount;
+
+      const analyticsSelect = $("#analyticsAccountSelect");
+      const previousAnalyticsAccount = analyticsSelect.value;
+      analyticsSelect.innerHTML = state.accounts.length
+        ? state.accounts.map(account => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.name)}</option>`).join("")
+        : `<option value="">No publishing accounts</option>`;
+      if (state.accounts.some(account => account.id === previousAnalyticsAccount)) {
+        analyticsSelect.value = previousAnalyticsAccount;
+      }
 
       const overlaySelect = $("#overlaySelect");
       const previousOverlay = overlaySelect.value;
@@ -1841,6 +2296,13 @@
       const element = $(selector);
       element.textContent = text;
       element.className = `check-chip ${ok ? "ok" : "bad"}`;
+    }
+
+    function updateHideCountsToggle() {
+      const enabled = $("#hideCounts").checked;
+      $("#hideCountsState").textContent = enabled
+        ? "On. ReelPoster will remind you after publishing; Instagram still requires a manual setting change."
+        : "Off. Instagram's API cannot hide likes, views, or shares automatically.";
     }
 
     function updateLogoOverlay() {
@@ -2044,9 +2506,13 @@
     });
     $("#createNav").addEventListener("click", () => showView("create"));
     $("#jobsNav").addEventListener("click", () => showView("jobs"));
+    $("#analyticsNav").addEventListener("click", () => showView("analytics"));
     $("#openJobsButton").addEventListener("click", () => showView("jobs"));
     $("#setupNav").addEventListener("click", () => showView("setup"));
     $("#refreshJobsButton").addEventListener("click", loadJobs);
+    $("#refreshAnalyticsButton").addEventListener("click", () => loadAnalytics(true));
+    $("#analyticsAccountSelect").addEventListener("change", () => loadAnalytics(true));
+    $("#hideCounts").addEventListener("change", updateHideCountsToggle);
     $("#settingsForm").addEventListener("submit", saveSettings);
     $("#accountForm").addEventListener("submit", saveAccount);
     $("#overlayForm").addEventListener("submit", saveOverlay);
@@ -2068,6 +2534,7 @@
     });
 
     renderPipeline();
+    updateHideCountsToggle();
     setScheduleMinimum();
     enableLogoDragging();
     startJobsPolling();

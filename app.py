@@ -37,7 +37,7 @@ DM_SENDERS_STATE_PATH = DATA_DIR / "dm_senders.json"
 DM_CONFIG_STATE_PATH = DATA_DIR / "dm_config.json"
 OVERLAYS_DIR = DATA_DIR / "overlays"
 ENV_PATH = BASE_DIR / ".env"
-APP_VERSION = "2026.06.12-render-free-memory-v1"
+APP_VERSION = "2026.06.12-analytics-v1"
 ALLOWED_LOGO_EXTENSIONS = {".png", ".gif"}
 ALLOWED_DELAYS = {0, 15, 30, 60}
 MAX_DM_MEDIA_BYTES = 500 * 1024 * 1024
@@ -104,6 +104,19 @@ executor = ThreadPoolExecutor(
     thread_name_prefix="reelposter",
 )
 publish_timers: dict[str, threading.Timer] = {}
+analytics_cache: dict[str, tuple[float, dict]] = {}
+analytics_lock = threading.RLock()
+ANALYTICS_CACHE_SECONDS = 300
+ANALYTICS_MEDIA_LIMIT = 18
+ANALYTICS_METRICS = (
+    "views",
+    "reach",
+    "likes",
+    "comments",
+    "saved",
+    "shares",
+    "total_interactions",
+)
 
 
 @app.before_request
@@ -998,6 +1011,283 @@ def graph_get(path: str, params: dict) -> dict:
     return parse_graph_response(response)
 
 
+def insight_metric_value(metric: dict) -> float:
+    values = metric.get("values")
+    if isinstance(values, list) and values:
+        value = values[-1].get("value", 0)
+    else:
+        total_value = metric.get("total_value")
+        value = (
+            total_value.get("value", 0)
+            if isinstance(total_value, dict)
+            else total_value or 0
+        )
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def fetch_media_insights(media_id: str, access_token: str) -> dict[str, float]:
+    result = graph_get(
+        f"{media_id}/insights",
+        {
+            "metric": ",".join(ANALYTICS_METRICS),
+            "access_token": access_token,
+        },
+    )
+    return {
+        str(metric.get("name", "")): insight_metric_value(metric)
+        for metric in result.get("data", [])
+        if metric.get("name")
+    }
+
+
+def analytics_timezone() -> ZoneInfo:
+    name = os.getenv("APP_TIMEZONE", "Asia/Kolkata").strip() or "Asia/Kolkata"
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("UTC")
+
+
+def analytics_slot_label(weekday: str, hour: int) -> str:
+    start = datetime(2026, 1, 1, hour % 24)
+    end = datetime(2026, 1, 1, (hour + 3) % 24)
+    start_label = start.strftime("%I %p").lstrip("0")
+    end_label = end.strftime("%I %p").lstrip("0")
+    return (
+        f"{weekday}, {start_label}"
+        f"-{end_label}"
+    )
+
+
+def best_observed_posting_times(media: list[dict]) -> list[dict]:
+    groups: dict[tuple[int, int], dict] = {}
+    for item in media:
+        timestamp = item.get("timestamp")
+        if not timestamp:
+            continue
+        try:
+            published = datetime.fromisoformat(
+                str(timestamp).replace("Z", "+00:00")
+            )
+        except ValueError:
+            continue
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=timezone.utc)
+        local_time = published.astimezone(analytics_timezone())
+        slot_hour = (local_time.hour // 3) * 3
+        key = (local_time.weekday(), slot_hour)
+        group = groups.setdefault(
+            key,
+            {
+                "weekday": local_time.strftime("%A"),
+                "hour": slot_hour,
+                "scores": [],
+                "views": [],
+                "interactions": [],
+            },
+        )
+        group["scores"].append(float(item.get("performance_score", 0)))
+        group["views"].append(float(item.get("views", 0)))
+        group["interactions"].append(float(item.get("total_interactions", 0)))
+
+    ranked = []
+    for group in groups.values():
+        sample_count = len(group["scores"])
+        average_score = sum(group["scores"]) / sample_count
+        confidence = 0.8 + min(sample_count, 4) * 0.05
+        ranked.append(
+            {
+                "label": analytics_slot_label(
+                    group["weekday"],
+                    group["hour"],
+                ),
+                "sample_count": sample_count,
+                "average_views": round(sum(group["views"]) / sample_count),
+                "average_interactions": round(
+                    sum(group["interactions"]) / sample_count
+                ),
+                "ranking_score": average_score * confidence,
+            }
+        )
+    ranked = [
+        item for item in ranked
+        if item["ranking_score"] > 0
+    ]
+    ranked.sort(
+        key=lambda item: (
+            item["ranking_score"],
+            item["sample_count"],
+            item["average_views"],
+        ),
+        reverse=True,
+    )
+    for item in ranked:
+        item.pop("ranking_score", None)
+    return ranked[:3]
+
+
+def build_instagram_analytics(account_id: str | None = None) -> dict:
+    settings = resolve_account_settings(account_id)
+    access_token = settings["IG_ACCESS_TOKEN"]
+    instagram_login = graph_api_base(access_token) == "https://graph.instagram.com"
+    profile_path = "me" if instagram_login else settings["IG_USER_ID"]
+    profile_fields = (
+        "user_id,username,followers_count,media_count"
+        if instagram_login
+        else "id,username,followers_count,media_count"
+    )
+    profile = graph_get(
+        profile_path,
+        {
+            "fields": profile_fields,
+            "access_token": access_token,
+        },
+    )
+    media_result = graph_get(
+        f"{settings['IG_USER_ID']}/media",
+        {
+            "fields": (
+                "id,caption,media_type,media_product_type,permalink,"
+                "timestamp,thumbnail_url,like_count,comments_count"
+            ),
+            "limit": ANALYTICS_MEDIA_LIMIT,
+            "access_token": access_token,
+        },
+    )
+
+    items = []
+    warnings = []
+    for media in media_result.get("data", []):
+        if (
+            media.get("media_type") != "VIDEO"
+            and media.get("media_product_type") != "REELS"
+        ):
+            continue
+        insights = {}
+        try:
+            insights = fetch_media_insights(str(media["id"]), access_token)
+        except ReelPosterError as exc:
+            if not warnings:
+                warnings.append(
+                    "Some Insights metrics could not be loaded. Confirm the "
+                    "token has instagram_business_manage_insights permission. "
+                    f"Meta said: {exc}"
+                )
+
+        likes = insights.get("likes", media.get("like_count", 0)) or 0
+        comments = insights.get(
+            "comments",
+            media.get("comments_count", 0),
+        ) or 0
+        saved = insights.get("saved", 0) or 0
+        shares = insights.get("shares", 0) or 0
+        views = insights.get("views", 0) or 0
+        reach = insights.get("reach", 0) or 0
+        interactions = insights.get(
+            "total_interactions",
+            likes + comments + saved + shares,
+        ) or 0
+        denominator = reach or views
+        engagement_rate = (
+            round((interactions / denominator) * 100, 2)
+            if denominator
+            else 0
+        )
+        performance_score = (
+            engagement_rate
+            if denominator
+            else interactions + (views * 0.01)
+        )
+        caption = str(media.get("caption", "")).strip()
+        items.append(
+            {
+                "id": media.get("id"),
+                "caption": caption,
+                "title": caption.splitlines()[0][:90] if caption else "Reel",
+                "timestamp": media.get("timestamp"),
+                "permalink": media.get("permalink"),
+                "thumbnail_url": media.get("thumbnail_url"),
+                "views": round(views),
+                "reach": round(reach),
+                "likes": round(likes),
+                "comments": round(comments),
+                "saved": round(saved),
+                "shares": round(shares),
+                "total_interactions": round(interactions),
+                "engagement_rate": engagement_rate,
+                "performance_score": performance_score,
+            }
+        )
+
+    totals = {
+        metric: sum(float(item.get(metric, 0)) for item in items)
+        for metric in (
+            "views",
+            "reach",
+            "likes",
+            "comments",
+            "saved",
+            "shares",
+            "total_interactions",
+        )
+    }
+    total_denominator = totals["reach"] or totals["views"]
+    totals["engagement_rate"] = (
+        round(
+            (totals["total_interactions"] / total_denominator) * 100,
+            2,
+        )
+        if total_denominator
+        else 0
+    )
+    for key, value in list(totals.items()):
+        if key != "engagement_rate":
+            totals[key] = round(value)
+
+    return {
+        "account": {
+            "id": settings["ACCOUNT_ID"],
+            "name": settings["ACCOUNT_NAME"],
+            "username": profile.get("username"),
+            "followers_count": profile.get("followers_count", 0),
+            "media_count": profile.get("media_count", 0),
+        },
+        "timezone": str(analytics_timezone()),
+        "analyzed_count": len(items),
+        "totals": totals,
+        "best_times": best_observed_posting_times(items),
+        "media": items,
+        "warnings": warnings,
+        "generated_at": utc_now(),
+        "methodology": (
+            "Best observed times rank three-hour windows from recent Reel "
+            "engagement. They describe your historical results, not guaranteed "
+            "future performance."
+        ),
+    }
+
+
+def instagram_analytics(
+    account_id: str | None = None,
+    refresh: bool = False,
+) -> dict:
+    settings = resolve_account_settings(account_id)
+    cache_key = f"{settings['ACCOUNT_ID']}:{settings['IG_USER_ID']}"
+    now = time.monotonic()
+    if not refresh:
+        with analytics_lock:
+            cached = analytics_cache.get(cache_key)
+            if cached and now - cached[0] < ANALYTICS_CACHE_SECONDS:
+                return cached[1]
+    payload = build_instagram_analytics(settings["ACCOUNT_ID"])
+    with analytics_lock:
+        analytics_cache[cache_key] = (now, payload)
+    return payload
+
+
 def parse_graph_response(response: requests.Response) -> dict:
     try:
         payload = response.json()
@@ -1015,6 +1305,12 @@ def parse_graph_response(response: requests.Response) -> dict:
                 "Instagram could not parse the access token. Generate a new token "
                 "and paste only its value in Setup, without IG_ACCESS_TOKEN=, "
                 "quotes, or spaces."
+            )
+        if "failed to decrypt" in message.lower():
+            raise ReelPosterError(
+                "The Instagram access token is invalid or has been revoked. "
+                "Generate a new long-lived token, update IG_ACCESS_TOKEN, and "
+                "redeploy ReelPoster."
             )
         raise ReelPosterError(f"{message}{': ' + detail if detail else ''}")
     return payload
@@ -1806,6 +2102,21 @@ def list_accounts():
     return jsonify(
         {"accounts": [public_account(item) for item in account_profiles()]}
     )
+
+
+@app.get("/api/analytics")
+def get_analytics():
+    account_id = request.args.get("account_id") or None
+    refresh = request.args.get("refresh", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    try:
+        payload = instagram_analytics(account_id, refresh=refresh)
+    except ReelPosterError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(payload)
 
 
 @app.post("/api/accounts")

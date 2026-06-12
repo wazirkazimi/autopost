@@ -252,6 +252,17 @@ class ReelPosterTests(unittest.TestCase):
             "IGAAabc123",
         )
 
+    def test_failed_to_decrypt_has_actionable_token_error(self):
+        response = Mock()
+        response.ok = False
+        response.status_code = 400
+        response.json.return_value = {
+            "error": {"message": "Failed to decrypt"}
+        }
+        with self.assertRaises(reelposter.ReelPosterError) as error:
+            reelposter.parse_graph_response(response)
+        self.assertIn("invalid or has been revoked", str(error.exception))
+
     def test_schedule_parser_accepts_future_utc_time(self):
         future = datetime.now(timezone.utc) + timedelta(hours=2)
         parsed = reelposter.parse_schedule_at(future.isoformat())
@@ -351,6 +362,109 @@ class ReelPosterTests(unittest.TestCase):
                 )
         self.assertEqual(result, "https://example.com/video.mp4")
         self.assertEqual(upload.call_args.kwargs["chunk_size"], 6 * 1024 * 1024)
+
+    def test_analytics_builds_totals_and_best_observed_time(self):
+        settings = {
+            "ACCOUNT_ID": "environment",
+            "ACCOUNT_NAME": "Main account",
+            "IG_USER_ID": "123",
+            "IG_ACCESS_TOKEN": "IGAA-test",
+        }
+        media = {
+            "data": [
+                {
+                    "id": "reel-1",
+                    "caption": "First reel",
+                    "media_type": "VIDEO",
+                    "media_product_type": "REELS",
+                    "timestamp": "2026-06-01T18:30:00+00:00",
+                    "permalink": "https://www.instagram.com/reel/one/",
+                    "like_count": 8,
+                    "comments_count": 2,
+                },
+                {
+                    "id": "reel-2",
+                    "caption": "Second reel",
+                    "media_type": "VIDEO",
+                    "media_product_type": "REELS",
+                    "timestamp": "2026-06-08T19:15:00+00:00",
+                    "permalink": "https://www.instagram.com/reel/two/",
+                    "like_count": 12,
+                    "comments_count": 3,
+                },
+            ]
+        }
+        insight_values = {
+            "reel-1": {
+                "views": 1000,
+                "reach": 800,
+                "likes": 80,
+                "comments": 10,
+                "saved": 8,
+                "shares": 12,
+                "total_interactions": 110,
+            },
+            "reel-2": {
+                "views": 2000,
+                "reach": 1500,
+                "likes": 160,
+                "comments": 20,
+                "saved": 15,
+                "shares": 25,
+                "total_interactions": 220,
+            },
+        }
+        with (
+            patch.dict(os.environ, {"APP_TIMEZONE": "UTC"}),
+            patch.object(
+                reelposter,
+                "resolve_account_settings",
+                return_value=settings,
+            ),
+            patch.object(
+                reelposter,
+                "graph_get",
+                side_effect=[
+                    {
+                        "username": "main",
+                        "followers_count": 500,
+                        "media_count": 20,
+                    },
+                    media,
+                ],
+            ),
+            patch.object(
+                reelposter,
+                "fetch_media_insights",
+                side_effect=lambda media_id, _token: insight_values[media_id],
+            ),
+        ):
+            payload = reelposter.build_instagram_analytics()
+
+        self.assertEqual(payload["analyzed_count"], 2)
+        self.assertEqual(payload["totals"]["views"], 3000)
+        self.assertEqual(payload["totals"]["total_interactions"], 330)
+        self.assertEqual(payload["best_times"][0]["label"], "Monday, 6 PM-9 PM")
+        self.assertEqual(payload["best_times"][0]["sample_count"], 2)
+
+    def test_analytics_endpoint_returns_selected_account_data(self):
+        payload = {
+            "account": {"id": "account-2", "name": "Second account"},
+            "totals": {},
+            "best_times": [],
+            "media": [],
+        }
+        with patch.object(
+            reelposter,
+            "instagram_analytics",
+            return_value=payload,
+        ) as analytics:
+            response = self.client.get(
+                "/api/analytics?account_id=account-2&refresh=1"
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["account"]["id"], "account-2")
+        analytics.assert_called_once_with("account-2", refresh=True)
 
     def test_jobs_endpoint_returns_newest_first(self):
         with reelposter.jobs_lock:

@@ -103,6 +103,17 @@ like/view counts or share counts. When enabled, ReelPoster preserves the
 preference and sends a post-publish reminder with the Reel link so you can apply
 the setting in Instagram without risking a failed media container.
 
+## Analytics
+
+Open **Analytics** to load recent Reel performance for any saved Instagram
+account. ReelPoster reads views, reach, likes, comments, saves, shares, and total
+interactions through Instagram Insights, then calculates an aggregate engagement
+rate and ranks the best observed three-hour posting windows in `APP_TIMEZONE`.
+
+The recommendation uses the account's recent historical results. It is not a
+guarantee that future posts will perform the same way. The access token needs the
+`instagram_business_manage_insights` permission.
+
 Saved account profiles, overlay metadata, and overlay files live under `data/`.
 The free Render Blueprint uses ephemeral storage, so this directory can be
 cleared whenever the service sleeps, restarts, or redeploys. API responses never
