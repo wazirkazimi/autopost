@@ -97,7 +97,7 @@ ffmpeg_lock = threading.RLock()
 executor = ThreadPoolExecutor(
     max_workers=bounded_env_int(
         "REELPOSTER_BACKGROUND_WORKERS",
-        4,
+        1,
         1,
         4,
     ),
@@ -1729,7 +1729,7 @@ def health():
             "runtime_limits": {
                 "background_workers": bounded_env_int(
                     "REELPOSTER_BACKGROUND_WORKERS",
-                    4,
+                    1,
                     1,
                     4,
                 ),
