@@ -1,8 +1,9 @@
 # ReelPoster
 
-ReelPoster is a Flask app and private Telegram bot for downloading an Instagram
-Reel, adding your logo with FFmpeg, uploading the finished video to Cloudinary,
-and publishing it through the Instagram Graph API.
+ReelPoster is a Flask app and private Telegram bot for importing public videos
+from Instagram, YouTube, Reddit, and X, adding a logo or animated GIF overlay
+with FFmpeg, uploading the finished video to Cloudinary, and publishing it
+through the Instagram Graph API.
 
 ## Requirements
 
@@ -45,12 +46,14 @@ separate system installation is normally unnecessary. You can set
 3. Start the app and send `/start` to the bot. It replies with your numeric
    Telegram user ID.
 4. Put that ID in `TELEGRAM_ALLOWED_USER_IDS` and restart the app.
-5. Send a public Instagram Reel URL to the bot.
+5. Send a supported public video URL to the bot.
 
-The bot fetches the caption, offers logo corner and size presets, lets you pick
-Grid + Reels or Reels-only, and supports a 0/15/30/60 minute delay. Use
-`/schedule YYYY-MM-DD HH:MM` for an exact time in `APP_TIMEZONE`, and
-`/caption NEW TEXT` to replace the fetched caption.
+The bot accepts Instagram Reels, YouTube videos and Shorts, Reddit video posts,
+and X video posts. Sending a URL confirms that you own the video or have
+permission to reuse it. The bot fetches the caption, offers logo corner and size
+presets, lets you pick Grid + Reels or Reels-only, and supports a 0/15/30/60
+minute delay. Use `/schedule YYYY-MM-DD HH:MM` for an exact time in
+`APP_TIMEZONE`, and `/caption NEW TEXT` to replace the fetched caption.
 
 The web UI remains the best option for exact drag positioning. Telegram uses
 four reliable corner presets.
@@ -121,15 +124,40 @@ return saved access tokens or Cloudinary secrets.
 
 ## Publishing flow
 
-1. Paste a public Instagram Reel URL and fetch it.
-2. Review or edit the extracted caption.
-3. Pick the logo position, size, and optional posting delay.
-4. ReelPoster watermarks the video, uploads it, creates an Instagram Reel
+1. Paste a supported public video URL and confirm that you may reuse it.
+2. Review the extracted source information and edit the caption.
+3. Choose whether to include source attribution.
+4. Pick the logo position, size, destination, and optional posting delay.
+5. ReelPoster watermarks the video, uploads it, creates an Instagram Reel
    container, waits for processing, and publishes it.
 
 The logo keeps its original PNG/GIF aspect ratio. After you click
 **Watermark & Post**, the task moves to **Jobs** and the Create screen is
 immediately available for another Reel.
+
+## Supported sources and limits
+
+- Instagram: public Reel URLs
+- YouTube: public videos, Shorts, and live recordings that are available as a
+  single video
+- Reddit: public video post URLs
+- X: public post URLs containing a video
+
+Playlists, galleries, and multi-video posts are rejected. An imported video
+must be between 3 seconds and 15 minutes and no larger than 450 MB. ReelPoster
+prefers MP4 input up to 1920 pixels high, then FFmpeg generates an H.264/AAC MP4
+for Instagram. Vertical 9:16 media is recommended; other aspect ratios are
+accepted with a warning and are not automatically cropped.
+
+For non-Instagram sources, source attribution is enabled by default and is
+appended to the caption without exceeding Instagram's 2,200-character caption
+limit. Attribution does not replace permission. Only import content you own,
+that is licensed for reuse, or for which you have the creator's permission.
+
+Source sites can require login cookies, rate-limit automated downloads, or block
+cloud-hosting IP ranges. Reddit currently requires authentication for some
+otherwise public posts. Keep yt-dlp updated, and treat cookies as sensitive
+credentials.
 
 The optional delay or calendar schedule starts after the Cloudinary upload and
 before ReelPoster creates the Instagram container. Keep ReelPoster running until
@@ -166,17 +194,21 @@ runs inside that process; additional workers would start duplicate bot
 instances. For reliable scheduling and persistent uploads, change the service
 to a paid instance and attach a disk at `/opt/render/project/src/data`.
 
-If Instagram blocks yt-dlp from Render's IP address, add a Render Secret File
+If a source blocks yt-dlp from Render's IP address, add a Render Secret File
 containing Netscape cookies and set `YTDLP_COOKIES_FILE` to that file's path.
+Do not upload cookies for your main Instagram account to a shared or untrusted
+host. A dedicated low-risk source account is safer when authentication is
+unavoidable.
 
-## Instagram download notes
+## Source download notes
 
-Instagram sometimes requires a logged-in session even for content that appears
-public. Export a Netscape-format `cookies.txt` file and set
+Instagram, Reddit, YouTube, and X can require a logged-in session even for
+content that appears public. Export a Netscape-format `cookies.txt` file and set
 `YTDLP_COOKIES_FILE` in `.env` when yt-dlp reports a login or cookies error.
 
 Only repost content you own or have permission to use. Download behavior and
-publishing access can change when Instagram updates its platform.
+publishing access can change when source sites or Instagram update their
+platforms.
 
 ## API version
 

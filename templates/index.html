@@ -651,6 +651,73 @@
       background: white;
     }
 
+    .rights-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+      cursor: pointer;
+    }
+
+    .rights-row input {
+      width: 16px;
+      height: 16px;
+      margin-top: 1px;
+      accent-color: var(--accent);
+    }
+
+    .source-summary {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+      margin-bottom: 20px;
+      padding: 14px;
+      border: 1px solid rgba(124, 58, 237, .3);
+      border-radius: 13px;
+      background: rgba(124, 58, 237, .07);
+    }
+
+    .source-badge {
+      padding: 6px 9px;
+      border-radius: 999px;
+      background: rgba(124, 58, 237, .18);
+      color: var(--accent-light);
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .source-copy strong {
+      display: block;
+      margin-bottom: 4px;
+      overflow: hidden;
+      color: #ededed;
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .source-copy span {
+      display: block;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .source-warning {
+      grid-column: 1 / -1;
+      padding-top: 10px;
+      border-top: 1px solid rgba(124, 58, 237, .18);
+      color: #d8c8ff;
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
     .action-row {
       display: flex;
       align-items: center;
@@ -1277,9 +1344,9 @@
 
     <section id="createView">
       <div class="hero">
-        <div class="eyebrow">Personal cross-posting workspace</div>
-        <h1>Repost with your mark.</h1>
-        <p>Bring in an Instagram Reel, add your logo, refine the caption, and publish it through the official Instagram API.</p>
+        <div class="eyebrow">Universal video repurposing</div>
+        <h1>Bring any clip to Reels.</h1>
+        <p>Import a public video from Instagram, YouTube, Reddit, or X, add your logo, refine the caption, and publish through the official Instagram API.</p>
       </div>
 
       <div class="pipeline" id="pipeline" aria-label="Posting progress"></div>
@@ -1288,21 +1355,27 @@
         <section class="card composer">
           <div class="card-header">
             <div>
-              <h2>Prepare a Reel</h2>
-              <p class="subcopy">Paste a public Reel URL to fetch the video and its caption.</p>
+              <h2>Import a video</h2>
+              <p class="subcopy">Supports Instagram Reels, YouTube videos and Shorts, Reddit video posts, and X video posts.</p>
             </div>
             <span class="setup-state" id="setupState">Setup needed</span>
           </div>
 
           <div class="field">
-            <label for="reelUrl">Instagram Reel URL</label>
+            <label for="reelUrl">Public video URL</label>
             <div class="url-row">
-              <input id="reelUrl" type="url" placeholder="https://www.instagram.com/reel/..." autocomplete="off">
-              <button class="primary-button" id="fetchButton" type="button">Fetch Reel</button>
+              <input id="reelUrl" type="url" placeholder="Instagram, YouTube, Reddit, or X URL" autocomplete="off">
+              <button class="primary-button" id="fetchButton" type="button">Import video</button>
             </div>
+            <label class="rights-row" for="rightsConfirmed">
+              <input id="rightsConfirmed" type="checkbox">
+              <span>I own this video or have permission to download, edit, and repost it. I understand that source credit does not replace permission.</span>
+            </label>
           </div>
 
           <div id="editor" class="hidden">
+            <div class="source-summary" id="sourceSummary"></div>
+
             <div class="field">
               <label for="caption">Caption</label>
               <textarea id="caption" maxlength="2200" placeholder="Write your Instagram caption..."></textarea>
@@ -1383,6 +1456,20 @@
                 </span>
                 <span class="toggle-control">
                   <input id="hideCounts" type="checkbox">
+                  <span class="toggle-track"></span>
+                </span>
+              </label>
+            </div>
+
+            <div class="field">
+              <label>Source credit</label>
+              <label class="toggle-setting" for="includeAttribution">
+                <span class="toggle-copy">
+                  <strong>Add source credit to the caption</strong>
+                  <span id="attributionState">Recommended for YouTube, Reddit, and X imports.</span>
+                </span>
+                <span class="toggle-control">
+                  <input id="includeAttribution" type="checkbox" checked>
                   <span class="toggle-track"></span>
                 </span>
               </label>
@@ -1745,6 +1832,33 @@
       return data;
     }
 
+    function formatDuration(seconds) {
+      if (!Number.isFinite(Number(seconds))) return "Duration unavailable";
+      const total = Math.round(Number(seconds));
+      const minutes = Math.floor(total / 60);
+      const remainder = total % 60;
+      return `${minutes}:${String(remainder).padStart(2, "0")}`;
+    }
+
+    function renderSourceSummary(job) {
+      const warnings = (job.media_warnings || []).map(warning =>
+        `<div class="source-warning">${escapeHtml(warning)}</div>`
+      ).join("");
+      const author = job.source_author ? ` · ${escapeHtml(job.source_author)}` : "";
+      const license = job.source_license ? ` · ${escapeHtml(job.source_license)}` : "";
+      $("#sourceSummary").innerHTML = `
+        <span class="source-badge">${escapeHtml(job.source_platform_label || "Video")}</span>
+        <div class="source-copy">
+          <strong>${escapeHtml(job.source_title || "Imported video")}</strong>
+          <span>${formatDuration(job.source_duration)}${author}${license}</span>
+        </div>
+        ${warnings}
+      `;
+      $("#includeAttribution").checked = Boolean(job.include_attribution);
+      $("#rightsConfirmed").checked = Boolean(job.rights_confirmed);
+      updateAttributionToggle();
+    }
+
     function renderJob(job) {
       renderPipeline(job.stages);
       const working = ["queued", "downloading", "watermarking", "uploading", "scheduled", "posting"].includes(job.status);
@@ -1758,6 +1872,7 @@
         editor.classList.remove("hidden");
         caption.value = job.caption || "";
         updateCaptionCount();
+        renderSourceSummary(job);
         postButton.innerHTML = postButton.dataset.label || "Watermark &amp; Post";
         postButton.disabled = false;
         $("#emptyPreview").classList.add("hidden");
@@ -1838,7 +1953,7 @@
             </div>
             <p class="job-message">${escapeHtml(job.error || job.message || "Waiting...")}</p>
             <div class="job-footer">
-              <span>${job.intake_source === "instagram_dm" ? `Instagram DM · sender ${escapeHtml(job.dm_sender_id || "unknown")}` : escapeHtml(scheduled || (job.share_to_feed ? "Reels + profile grid" : "Reels only"))}</span>
+              <span>${job.intake_source === "instagram_dm" ? `Instagram DM · sender ${escapeHtml(job.dm_sender_id || "unknown")}` : `${escapeHtml(job.source_platform_label || "Video")} · ${escapeHtml(scheduled || (job.share_to_feed ? "Reels + profile grid" : "Reels only"))}`}</span>
               ${reviewAction}
               ${job.permalink ? `<a href="${escapeHtml(job.permalink)}" target="_blank" rel="noreferrer">${job.manual_count_hiding_required ? "Hide counts in Instagram" : "Open Reel"}</a>` : ""}
             </div>
@@ -2067,7 +2182,13 @@
 
     async function fetchReel() {
       const url = $("#reelUrl").value.trim();
-      if (!url) return showToast("Paste an Instagram Reel URL first.", true);
+      if (!url) return showToast("Paste a public video URL first.", true);
+      if (!$("#rightsConfirmed").checked) {
+        return showToast(
+          "Confirm that you own the video or have permission to repost it.",
+          true
+        );
+      }
       editor.classList.add("hidden");
       $("#previewFrame").classList.add("hidden");
       $("#videoPreview").removeAttribute("src");
@@ -2080,7 +2201,10 @@
         const job = await api("/api/reels/prepare", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url })
+          body: JSON.stringify({
+            url,
+            rights_confirmed: true
+          })
         });
         state.jobId = job.id;
         renderJob(job);
@@ -2114,7 +2238,9 @@
             destination: document.querySelector('input[name="destination"]:checked').value,
             account_id: $("#accountSelect").value,
             overlay_id: $("#overlaySelect").value,
-            hide_counts: $("#hideCounts").checked
+            hide_counts: $("#hideCounts").checked,
+            rights_confirmed: $("#rightsConfirmed").checked,
+            include_attribution: $("#includeAttribution").checked
           })
         });
         resetComposer();
@@ -2149,7 +2275,10 @@
       $("#scheduleAt").value = "";
       document.querySelector('input[name="destination"][value="grid"]').checked = true;
       $("#hideCounts").checked = false;
+      $("#rightsConfirmed").checked = false;
+      $("#includeAttribution").checked = true;
       updateHideCountsToggle();
+      updateAttributionToggle();
       state.logoX = 90;
       state.logoY = 90;
       state.position = "bottom-right";
@@ -2303,6 +2432,13 @@
       $("#hideCountsState").textContent = enabled
         ? "On. ReelPoster will remind you after publishing; Instagram still requires a manual setting change."
         : "Off. Instagram's API cannot hide likes, views, or shares automatically.";
+    }
+
+    function updateAttributionToggle() {
+      const enabled = $("#includeAttribution").checked;
+      $("#attributionState").textContent = enabled
+        ? "On. Creator/platform and the original URL will be appended when posting."
+        : "Off. Only disable this when credit is unnecessary or handled elsewhere.";
     }
 
     function updateLogoOverlay() {
@@ -2513,6 +2649,7 @@
     $("#refreshAnalyticsButton").addEventListener("click", () => loadAnalytics(true));
     $("#analyticsAccountSelect").addEventListener("change", () => loadAnalytics(true));
     $("#hideCounts").addEventListener("change", updateHideCountsToggle);
+    $("#includeAttribution").addEventListener("change", updateAttributionToggle);
     $("#settingsForm").addEventListener("submit", saveSettings);
     $("#accountForm").addEventListener("submit", saveAccount);
     $("#overlayForm").addEventListener("submit", saveOverlay);
@@ -2535,6 +2672,7 @@
 
     renderPipeline();
     updateHideCountsToggle();
+    updateAttributionToggle();
     setScheduleMinimum();
     enableLogoDragging();
     startJobsPolling();

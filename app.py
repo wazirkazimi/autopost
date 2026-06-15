@@ -37,10 +37,19 @@ DM_SENDERS_STATE_PATH = DATA_DIR / "dm_senders.json"
 DM_CONFIG_STATE_PATH = DATA_DIR / "dm_config.json"
 OVERLAYS_DIR = DATA_DIR / "overlays"
 ENV_PATH = BASE_DIR / ".env"
-APP_VERSION = "2026.06.12-analytics-v1"
+APP_VERSION = "2026.06.15-universal-import-v1"
 ALLOWED_LOGO_EXTENSIONS = {".png", ".gif"}
 ALLOWED_DELAYS = {0, 15, 30, 60}
 MAX_DM_MEDIA_BYTES = 500 * 1024 * 1024
+MAX_SOURCE_MEDIA_BYTES = 450 * 1024 * 1024
+MIN_REEL_DURATION_SECONDS = 3
+MAX_REEL_DURATION_SECONDS = 15 * 60
+SOURCE_PLATFORMS = {
+    "instagram": "Instagram",
+    "youtube": "YouTube",
+    "reddit": "Reddit",
+    "x": "X",
+}
 ALLOWED_DM_ATTACHMENT_TYPES = {"video", "share", "ig_reel", "reel"}
 TRUSTED_META_MEDIA_DOMAINS = (
     "instagram.com",
@@ -404,6 +413,19 @@ def public_job(job: dict) -> dict:
         "error": job.get("error"),
         "caption": job.get("caption", ""),
         "source_url": job.get("source_url", ""),
+        "source_platform": job.get("source_platform", "instagram"),
+        "source_platform_label": SOURCE_PLATFORMS.get(
+            job.get("source_platform", "instagram"),
+            "Video",
+        ),
+        "source_title": job.get("source_title"),
+        "source_author": job.get("source_author"),
+        "source_duration": job.get("source_duration"),
+        "source_license": job.get("source_license"),
+        "source_attribution": job.get("source_attribution"),
+        "rights_confirmed": job.get("rights_confirmed", False),
+        "include_attribution": job.get("include_attribution", False),
+        "media_warnings": job.get("media_warnings", []),
         "media_id": job.get("media_id"),
         "permalink": job.get("permalink"),
         "delay_minutes": job.get("delay_minutes", 0),
@@ -465,20 +487,118 @@ def get_job_or_404(job_id: str):
         return dict(job) if job else None
 
 
-def validate_reel_url(value: str) -> str:
+def source_platform_for_url(value: str) -> tuple[str, str]:
     value = (value or "").strip()
     try:
         parsed = urlparse(value)
     except ValueError as exc:
-        raise ReelPosterError("Enter a valid Instagram Reel URL.") from exc
+        raise ReelPosterError("Enter a valid public video URL.") from exc
 
     host = (parsed.hostname or "").lower()
     path = parsed.path.lower()
-    valid_host = host == "instagram.com" or host.endswith(".instagram.com")
-    valid_path = "/reel/" in path or "/reels/" in path
-    if parsed.scheme not in {"http", "https"} or not valid_host or not valid_path:
+    if parsed.scheme not in {"http", "https"}:
+        raise ReelPosterError("Video URLs must use http or https.")
+
+    instagram_host = host == "instagram.com" or host.endswith(".instagram.com")
+    if instagram_host and ("/reel/" in path or "/reels/" in path):
+        return value, "instagram"
+
+    youtube_host = host in {
+        "youtube.com",
+        "www.youtube.com",
+        "m.youtube.com",
+        "music.youtube.com",
+        "youtu.be",
+    }
+    youtube_path = (
+        (host == "youtu.be" and bool(path.strip("/")))
+        or path.startswith("/watch")
+        or path.startswith("/shorts/")
+        or path.startswith("/live/")
+    )
+    if youtube_host and youtube_path:
+        return value, "youtube"
+
+    reddit_host = (
+        host in {"reddit.com", "www.reddit.com", "old.reddit.com", "redd.it"}
+        or host.endswith(".reddit.com")
+        or host == "v.redd.it"
+    )
+    if reddit_host and bool(path.strip("/")):
+        return value, "reddit"
+
+    x_host = host in {
+        "x.com",
+        "www.x.com",
+        "mobile.x.com",
+        "twitter.com",
+        "www.twitter.com",
+        "mobile.twitter.com",
+    }
+    if x_host and "/status/" in path:
+        return value, "x"
+
+    raise ReelPosterError(
+        "Use a public Instagram Reel, YouTube video/Short, Reddit video post, "
+        "or X post containing a video."
+    )
+
+
+def validate_source_url(value: str) -> str:
+    return source_platform_for_url(value)[0]
+
+
+def validate_reel_url(value: str) -> str:
+    source_url, platform = source_platform_for_url(value)
+    if platform != "instagram":
         raise ReelPosterError("Enter a public Instagram Reel URL.")
-    return value
+    return source_url
+
+
+def source_media_match_filter(info: dict, *, incomplete: bool) -> str | None:
+    if info.get("_type") in {"playlist", "multi_video"}:
+        return "Playlists and multi-video posts are not supported."
+    duration = info.get("duration")
+    if duration is not None:
+        try:
+            duration = float(duration)
+        except (TypeError, ValueError):
+            duration = None
+    if duration is not None and duration < MIN_REEL_DURATION_SECONDS:
+        return "The source video is shorter than Instagram's 3-second minimum."
+    if duration is not None and duration > MAX_REEL_DURATION_SECONDS:
+        return "The source video is longer than Instagram's 15-minute Reel limit."
+    size = info.get("filesize") or info.get("filesize_approx")
+    if size and int(size) > MAX_SOURCE_MEDIA_BYTES:
+        return "The source video is larger than ReelPoster's 450 MB import limit."
+    return None
+
+
+def source_attribution_text(
+    platform: str,
+    author: str | None,
+    source_url: str,
+) -> str:
+    platform_label = SOURCE_PLATFORMS.get(platform, "Source")
+    author = str(author or "").strip()
+    if platform == "reddit" and author and not author.startswith("u/"):
+        author = f"u/{author}"
+    elif platform in {"instagram", "x"} and author and not author.startswith("@"):
+        author = f"@{author}"
+    credit = f"Source: {author} on {platform_label}" if author else f"Source: {platform_label}"
+    return f"{credit}\n{source_url}"
+
+
+def caption_with_attribution(caption: str, attribution: str) -> str:
+    caption = str(caption or "").strip()
+    attribution = str(attribution or "").strip()
+    combined = f"{caption}\n\n{attribution}".strip()
+    if len(combined) > 2200:
+        raise ReelPosterError(
+            "The caption plus source credit exceeds Instagram's 2,200-character "
+            "limit. Shorten the caption or turn off source credit."
+        )
+    return combined
 
 
 def locate_downloaded_video(job_dir: Path) -> Path:
@@ -489,14 +609,67 @@ def locate_downloaded_video(job_dir: Path) -> Path:
         if path.is_file() and path.suffix.lower() not in ignored_suffixes
     ]
     if not files:
-        raise ReelPosterError("The Reel downloaded, but no video file was produced.")
+        raise ReelPosterError("The source downloaded, but no video file was produced.")
     return max(files, key=lambda path: path.stat().st_size)
 
 
-def prepare_reel(job_id: str, reel_url: str) -> None:
+def probe_video_duration(path: Path) -> float | None:
+    ffmpeg = ffmpeg_executable()
+    if not ffmpeg:
+        return None
+    with ffmpeg_lock:
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-i", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    match = re.search(
+        r"Duration:\s*(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)",
+        result.stderr,
+    )
+    if not match:
+        return None
+    hours, minutes, seconds = match.groups()
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+def validate_imported_video(path: Path, duration: float | None = None) -> list[str]:
+    if path.stat().st_size > MAX_SOURCE_MEDIA_BYTES:
+        raise ReelPosterError(
+            "The downloaded video is larger than ReelPoster's 450 MB import limit."
+        )
+    duration = duration if duration is not None else probe_video_duration(path)
+    if duration is not None and duration < MIN_REEL_DURATION_SECONDS:
+        raise ReelPosterError(
+            "The video is shorter than Instagram's 3-second minimum."
+        )
+    if duration is not None and duration > MAX_REEL_DURATION_SECONDS:
+        raise ReelPosterError(
+            "The video is longer than Instagram's 15-minute Reel limit. "
+            "Trim it before importing."
+        )
+    width, height = probe_video_dimensions(path)
+    warnings = []
+    ratio = width / height if height else 0
+    if not 0.5 <= ratio <= 0.8:
+        warnings.append(
+            "This video is not close to the recommended vertical 9:16 format. "
+            "Instagram may crop it or show empty space."
+        )
+    return warnings
+
+
+def prepare_reel(job_id: str, source_url: str) -> None:
     try:
+        job = get_job_or_404(job_id) or {}
+        platform = job.get("source_platform", "instagram")
+        platform_label = SOURCE_PLATFORMS.get(platform, "video source")
         update_job(job_id, status="downloading", active_stage="download")
-        add_event(job_id, "Downloading Reel and reading its caption...")
+        add_event(
+            job_id,
+            f"Downloading from {platform_label} and reading its metadata...",
+        )
         job_dir = JOBS_DIR / job_id
         job_dir.mkdir(parents=True, exist_ok=True)
         ffmpeg = ffmpeg_executable()
@@ -507,10 +680,15 @@ def prepare_reel(job_id: str, reel_url: str) -> None:
             )
 
         ydl_options = {
-            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "format": (
+                "bestvideo[height<=1920][ext=mp4]+bestaudio[ext=m4a]/"
+                "best[height<=1920][ext=mp4]/best[height<=1920]/best"
+            ),
             "outtmpl": str(job_dir / "source.%(ext)s"),
             "merge_output_format": "mp4",
             "concurrent_fragment_downloads": 1,
+            "match_filter": source_media_match_filter,
+            "max_filesize": MAX_SOURCE_MEDIA_BYTES,
             "noplaylist": True,
             "quiet": True,
             "no_warnings": True,
@@ -524,19 +702,45 @@ def prepare_reel(job_id: str, reel_url: str) -> None:
 
         with ffmpeg_lock:
             with yt_dlp.YoutubeDL(ydl_options) as ydl:
-                info = ydl.extract_info(reel_url, download=True)
+                info = ydl.extract_info(source_url, download=True)
 
         source_path = locate_downloaded_video(job_dir)
-        caption = (info.get("description") or info.get("title") or "").strip()
-        job = get_job_or_404(job_id) or {}
+        duration = info.get("duration")
+        try:
+            duration = float(duration) if duration is not None else None
+        except (TypeError, ValueError):
+            duration = None
+        warnings = validate_imported_video(source_path, duration)
+        title = str(info.get("title") or "").strip()
+        description = str(info.get("description") or "").strip()
+        caption = (description or title)[:2200]
+        author = str(
+            info.get("uploader")
+            or info.get("channel")
+            or info.get("creator")
+            or ""
+        ).strip()
+        canonical_url = str(info.get("webpage_url") or source_url).strip()
         submitted_caption = dm_caption_text(job.get("dm_text", ""))
         if submitted_caption:
             caption = submitted_caption
+        attribution = source_attribution_text(
+            platform,
+            author,
+            canonical_url,
+        )
         update_job(
             job_id,
             status="ready",
             active_stage=None,
             source_path=str(source_path),
+            source_url=canonical_url,
+            source_title=title[:200] or None,
+            source_author=author[:120] or None,
+            source_duration=round(duration, 2) if duration is not None else None,
+            source_license=str(info.get("license") or "").strip()[:120] or None,
+            source_attribution=attribution,
+            media_warnings=warnings,
             caption=caption,
         )
         if job.get("intake_source") == "instagram_dm":
@@ -546,7 +750,11 @@ def prepare_reel(job_id: str, reel_url: str) -> None:
                 "until you approve it.",
             )
         else:
-            add_event(job_id, "Reel ready. Review the caption and posting options.")
+            add_event(
+                job_id,
+                f"{platform_label} video ready. Review the source, caption, and "
+                "posting options.",
+            )
     except Exception as exc:
         fail_job(job_id, normalize_error(exc))
 
@@ -622,8 +830,15 @@ def normalize_error(exc: Exception) -> Exception:
     lower = text.lower()
     if "login required" in lower or "cookies" in lower:
         return ReelPosterError(
-            "Instagram blocked the download. Use a public Reel or set "
-            "YTDLP_COOKIES_FILE in .env to a valid cookies.txt file."
+            "The source platform blocked the download or requires login. Use a "
+            "public video. Do not upload cookies from your main Instagram "
+            "account; platform cookies on a datacenter server can trigger "
+            "security challenges."
+        )
+    if "unsupported url" in lower:
+        return ReelPosterError(
+            "yt-dlp could not extract this public video. The platform may have "
+            "changed or the post may not contain downloadable video."
         )
     return exc
 
@@ -1655,19 +1870,33 @@ def publish_uploaded_reel(job_id: str) -> None:
         fail_job(job_id, normalize_error(exc))
 
 
-def create_prepare_job(reel_url: str, metadata: dict | None = None) -> dict:
-    reel_url = validate_reel_url(reel_url)
+def create_prepare_job(
+    source_url: str,
+    metadata: dict | None = None,
+    rights_confirmed: bool = False,
+) -> dict:
+    source_url, source_platform = source_platform_for_url(source_url)
     job_id = uuid.uuid4().hex
     now = utc_now()
     job = {
         "id": job_id,
-        "source_url": reel_url,
+        "source_url": source_url,
+        "source_platform": source_platform,
+        "rights_confirmed": bool(rights_confirmed),
+        "include_attribution": source_platform != "instagram",
         "status": "queued",
         "active_stage": "download",
         "message": "Queued",
         "error": None,
         "caption": "",
-        "events": [{"time": now, "message": "Reel added to the queue."}],
+        "events": [
+            {
+                "time": now,
+                "message": (
+                    f"{SOURCE_PLATFORMS[source_platform]} video added to the queue."
+                ),
+            }
+        ],
         "created_at": now,
         "updated_at": now,
     }
@@ -1684,7 +1913,7 @@ def create_prepare_job(reel_url: str, metadata: dict | None = None) -> dict:
     with jobs_lock:
         jobs[job_id] = job
         persist_jobs()
-    executor.submit(prepare_reel, job_id, reel_url)
+    executor.submit(prepare_reel, job_id, source_url)
     return public_job(job)
 
 
@@ -1887,6 +2116,8 @@ def queue_post_job(
     account_id: str | None = None,
     overlay_id: str | None = None,
     hide_counts_requested: bool = False,
+    rights_confirmed: bool = False,
+    include_attribution: bool = False,
 ) -> dict:
     with jobs_lock:
         job = jobs.get(job_id)
@@ -1933,6 +2164,25 @@ def queue_post_job(
         hide_counts_requested is True
         or str(hide_counts_requested).strip().lower() in {"1", "true", "yes", "on"}
     )
+    rights_confirmed = (
+        rights_confirmed is True
+        or str(rights_confirmed).strip().lower() in {"1", "true", "yes", "on"}
+        or bool(job.get("rights_confirmed"))
+    )
+    include_attribution = (
+        include_attribution is True
+        or str(include_attribution).strip().lower() in {"1", "true", "yes", "on"}
+    )
+    source_platform = job.get("source_platform", "instagram")
+    if source_platform != "instagram" and not rights_confirmed:
+        raise ReelPosterError(
+            "Confirm that you own this video or have permission to repost it."
+        )
+    if include_attribution and job.get("source_attribution"):
+        caption = caption_with_attribution(
+            caption,
+            job["source_attribution"],
+        )
     account = resolve_account_settings(account_id)
     _, overlay = resolve_overlay_path(overlay_id)
 
@@ -1950,6 +2200,8 @@ def queue_post_job(
         overlay_id=overlay["id"],
         overlay_name=overlay.get("name") or "Overlay",
         hide_counts_requested=hide_counts_requested,
+        rights_confirmed=rights_confirmed,
+        include_attribution=include_attribution,
         manual_count_hiding_required=False,
         review_required=False,
         status="watermarking",
@@ -2354,7 +2606,16 @@ def get_logo():
 def start_prepare():
     payload = request.get_json(silent=True) or {}
     try:
-        job = create_prepare_job(payload.get("url", ""))
+        rights_confirmed = payload.get("rights_confirmed") is True
+        if not rights_confirmed:
+            raise ReelPosterError(
+                "Confirm that you own the video or have permission to download "
+                "and repost it."
+            )
+        job = create_prepare_job(
+            payload.get("url", ""),
+            rights_confirmed=True,
+        )
     except ReelPosterError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(job), 202
@@ -2377,6 +2638,8 @@ def start_post(job_id: str):
             account_id=payload.get("account_id"),
             overlay_id=payload.get("overlay_id"),
             hide_counts_requested=payload.get("hide_counts", False),
+            rights_confirmed=payload.get("rights_confirmed", False),
+            include_attribution=payload.get("include_attribution", False),
         )
     except JobNotFoundError as exc:
         return jsonify({"error": str(exc)}), 404

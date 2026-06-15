@@ -538,23 +538,89 @@ class ReelPosterTests(unittest.TestCase):
         )
         self.assertFalse(payload["hide_counts_requested"])
 
-    def test_prepare_rejects_non_instagram_url(self):
+    def test_prepare_requires_rights_confirmation(self):
         response = self.client.post(
             "/api/reels/prepare",
-            json={"url": "https://example.com/reel/not-instagram"},
+            json={"url": "https://www.youtube.com/shorts/ABC123"},
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Instagram Reel URL", response.get_json()["error"])
+        self.assertIn("own the video", response.get_json()["error"])
+
+    def test_universal_source_validation(self):
+        examples = {
+            "https://www.instagram.com/reel/ABC123/": "instagram",
+            "https://www.youtube.com/watch?v=ABC123": "youtube",
+            "https://youtu.be/ABC123": "youtube",
+            "https://www.youtube.com/shorts/ABC123": "youtube",
+            "https://www.reddit.com/r/videos/comments/abc123/title/": "reddit",
+            "https://v.redd.it/abc123": "reddit",
+            "https://x.com/example/status/123456": "x",
+            "https://twitter.com/example/status/123456": "x",
+        }
+        for url, expected in examples.items():
+            with self.subTest(url=url):
+                _normalized, platform = reelposter.source_platform_for_url(url)
+                self.assertEqual(platform, expected)
+
+    def test_universal_source_rejects_arbitrary_and_playlist_urls(self):
+        with self.assertRaises(reelposter.ReelPosterError):
+            reelposter.source_platform_for_url("https://example.com/video.mp4")
+        with self.assertRaises(reelposter.ReelPosterError):
+            reelposter.source_platform_for_url(
+                "https://www.youtube.com/playlist?list=ABC123"
+            )
+
+    def test_source_media_filter_rejects_unsupported_media(self):
+        self.assertIn(
+            "15-minute",
+            reelposter.source_media_match_filter(
+                {"duration": 901},
+                incomplete=False,
+            ),
+        )
+        self.assertIn(
+            "450 MB",
+            reelposter.source_media_match_filter(
+                {"filesize": reelposter.MAX_SOURCE_MEDIA_BYTES + 1},
+                incomplete=False,
+            ),
+        )
+        self.assertIn(
+            "Playlists",
+            reelposter.source_media_match_filter(
+                {"_type": "playlist"},
+                incomplete=False,
+            ),
+        )
+
+    def test_caption_attribution_respects_instagram_limit(self):
+        credit = reelposter.source_attribution_text(
+            "youtube",
+            "Creator",
+            "https://youtu.be/ABC123",
+        )
+        self.assertIn("Creator on YouTube", credit)
+        self.assertIn("https://youtu.be/ABC123", credit)
+        combined = reelposter.caption_with_attribution("Caption", credit)
+        self.assertIn("Caption\n\nSource:", combined)
+        with self.assertRaises(reelposter.ReelPosterError):
+            reelposter.caption_with_attribution("x" * 2200, credit)
 
     def test_prepare_creates_background_job(self):
         with patch.object(reelposter.executor, "submit") as submit:
             response = self.client.post(
                 "/api/reels/prepare",
-                json={"url": "https://www.instagram.com/reel/ABC123/"},
+                json={
+                    "url": "https://www.youtube.com/shorts/ABC123",
+                    "rights_confirmed": True,
+                },
             )
         self.assertEqual(response.status_code, 202)
         payload = response.get_json()
         self.assertEqual(payload["status"], "queued")
+        self.assertEqual(payload["source_platform"], "youtube")
+        self.assertTrue(payload["rights_confirmed"])
+        self.assertTrue(payload["include_attribution"])
         self.assertEqual(payload["stages"][0]["state"], "active")
         submit.assert_called_once()
 
@@ -785,6 +851,69 @@ class ReelPosterTests(unittest.TestCase):
         self.assertFalse(
             reelposter.jobs[job_id]["manual_count_hiding_required"]
         )
+
+    def test_non_instagram_post_requires_rights_and_can_add_attribution(self):
+        job_id = "youtube-rights-job"
+        with reelposter.jobs_lock:
+            reelposter.jobs[job_id] = {
+                "id": job_id,
+                "status": "ready",
+                "active_stage": None,
+                "source_path": str(Path(tempfile.gettempdir()) / "source.mp4"),
+                "source_url": "https://youtu.be/ABC123",
+                "source_platform": "youtube",
+                "source_attribution": (
+                    "Source: Creator on YouTube\nhttps://youtu.be/ABC123"
+                ),
+                "rights_confirmed": False,
+                "caption": "",
+                "events": [],
+                "created_at": reelposter.utc_now(),
+                "updated_at": reelposter.utc_now(),
+            }
+        account = {
+            "ACCOUNT_ID": "environment",
+            "ACCOUNT_NAME": "Environment account",
+        }
+        overlay = {"id": "default", "name": "Default overlay"}
+        with (
+            patch.object(reelposter, "resolve_account_settings", return_value=account),
+            patch.object(
+                reelposter,
+                "resolve_overlay_path",
+                return_value=(Path("mark.png"), overlay),
+            ),
+            patch.object(reelposter.executor, "submit") as submit,
+        ):
+            rejected = self.client.post(
+                f"/api/reels/{job_id}/post",
+                json={
+                    "placement_mode": "center-v2",
+                    "x_center_percent": 80,
+                    "y_center_percent": 36,
+                    "destination": "grid",
+                },
+            )
+            accepted = self.client.post(
+                f"/api/reels/{job_id}/post",
+                json={
+                    "caption": "My caption",
+                    "placement_mode": "center-v2",
+                    "x_center_percent": 80,
+                    "y_center_percent": 36,
+                    "destination": "grid",
+                    "rights_confirmed": True,
+                    "include_attribution": True,
+                },
+            )
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIn("permission", rejected.get_json()["error"])
+        self.assertEqual(accepted.status_code, 202)
+        self.assertIn(
+            "Source: Creator on YouTube",
+            reelposter.jobs[job_id]["caption"],
+        )
+        submit.assert_called_once()
 
     def test_reel_container_uses_only_documented_visibility_parameters(self):
         job = {

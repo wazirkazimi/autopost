@@ -339,7 +339,9 @@ async def start_command(
     await update.effective_message.reply_text(
         "ReelPoster is ready.\n"
         f"Your Telegram user ID is {user_id}.\n\n"
-        "Send an Instagram Reel URL to begin. Commands:\n"
+        "Send a public Instagram Reel, YouTube, Reddit, or X video URL to begin.\n"
+        "By sending a URL, you confirm that you own the video or have permission "
+        "to repost it. Commands:\n"
         "/caption NEW TEXT\n"
         "/schedule YYYY-MM-DD HH:MM\n"
         "/status\n"
@@ -373,12 +375,13 @@ async def reel_url_message(
                 "telegram_overlay_id": overlays[0]["id"] if overlays else None,
                 "telegram_hide_counts": False,
             },
+            rights_confirmed=True,
         )
     except reelposter.ReelPosterError as exc:
         await update.effective_message.reply_text(str(exc))
         return
     await update.effective_message.reply_text(
-        f"Job {job['id'][:8]} added. Downloading the Reel and caption..."
+        f"Job {job['id'][:8]} added. Downloading the video and metadata..."
     )
     context.application.create_task(
         wait_for_prepare(context.application, job["id"]),
@@ -579,6 +582,8 @@ async def publish_callback(query, job: dict) -> None:
             account_id=job.get("telegram_account_id"),
             overlay_id=job.get("telegram_overlay_id"),
             hide_counts_requested=job.get("telegram_hide_counts", False),
+            rights_confirmed=True,
+            include_attribution=job.get("source_platform") != "instagram",
         )
     except reelposter.ReelPosterError as exc:
         await query.edit_message_text(f"Could not queue the Reel:\n{exc}")
